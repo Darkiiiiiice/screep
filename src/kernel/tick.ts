@@ -1,5 +1,5 @@
 /**
- * Tick kernel skeleton.
+ * Tick kernel.
  *
  * Phase pipeline with CPU accounting and priority-based degradation. The CPU
  * budget is a real constraint, not a nicety: the official server hard-stops the
@@ -15,9 +15,14 @@
  *   cleanup last, and always runs: memory GC and the stats write are what make
  *     the *next* tick possible.
  *
- * Full phase bodies land in M1/M2. What is fixed here is the ordering, the
- * budget arithmetic, and the failure isolation.
+ * Phase bodies land in M2+. What is fixed here is the ordering, the budget
+ * arithmetic, the failure isolation, and the per-phase profiling.
  */
+import { record } from './errors';
+import { log, flushLogSummary } from './log';
+import { initMemory, gcDeadCreeps } from './memory';
+import { maybeReportProfile, profilePhase } from './profiler';
+import { maybeWriteStats } from './stats';
 
 /** Work phases, in pipeline order. */
 export const PHASES = [
@@ -71,6 +76,8 @@ export function tickBudget(): number {
  * continues, because losing one phase is strictly better than losing the tick.
  */
 export function kernelTick(): void {
+  profilePhase('kernel:init', initMemory);
+
   // Hold back the cleanup reserve up front so degradation decisions are made
   // against the budget we can actually spend.
   const working = tickBudget() * (1 - CLEANUP_RESERVE);
@@ -84,54 +91,46 @@ export function kernelTick(): void {
     }
 
     try {
-      runPhase(phase);
+      profilePhase(phase, () => runPhase(phase));
     } catch (err) {
-      reportFailure(`phase ${phase}`, err);
+      record(err, `phase ${phase}`);
     }
   }
 
   if (skipped.length > 0) {
-    log(`tick=${Game.time} cpu=${Game.cpu.getUsed().toFixed(1)}/${working.toFixed(1)} skipped=${skipped.join(',')}`);
+    log(
+      'warn',
+      'degrade',
+      `cpu=${Game.cpu.getUsed().toFixed(1)}/${working.toFixed(1)} skipped=${skipped.join(',')}`,
+    );
   }
+
+  profilePhase('kernel:report', () => {
+    maybeReportProfile();
+    flushLogSummary();
+  });
 }
 
 /**
- * Phase implementations land in M1/M2. Kept as an explicit switch so the
- * pipeline order is visible in one place and adding a phase is a compile error
- * until it is handled.
+ * Phase bodies land in M2+. Kept as an explicit switch so the pipeline order is
+ * visible in one place and adding a phase is a compile error until it is
+ * handled.
  */
 function runPhase(phase: Phase): void {
   switch (phase) {
+    case 'cleanup':
+      // Memory first: reclaiming dead creeps' entries shrinks what the stats
+      // write has to serialize, and both happen in this phase.
+      gcDeadCreeps();
+      maybeWriteStats();
+      return;
+
     case 'prefetch':
     case 'intel':
     case 'plan':
     case 'spawn':
     case 'assign':
     case 'execute':
-    case 'cleanup':
       return;
   }
-}
-
-// TODO(M1): move into src/kernel/errors.ts and src/kernel/log.ts —
-// signature-based dedupe, a ring buffer in Memory, and a console budget. Until
-// then, rate-limit so a broken phase cannot flood the console and burn CPU on
-// logging every tick.
-let lastReportTick = -Infinity;
-const REPORT_INTERVAL = 20;
-
-function shouldReport(): boolean {
-  if (Game.time - lastReportTick < REPORT_INTERVAL) return false;
-  lastReportTick = Game.time;
-  return true;
-}
-
-function log(message: string): void {
-  console.log(`[kernel] ${message}`);
-}
-
-function reportFailure(what: string, err: unknown): void {
-  if (!shouldReport()) return;
-  const detail = err instanceof Error ? err.message : String(err);
-  log(`tick=${Game.time} ${what} failed: ${detail}`);
 }

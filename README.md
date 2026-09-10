@@ -22,6 +22,7 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 | `npm run typecheck` | `tsc --noEmit` 类型门禁（esbuild 只剥类型不检查） | 否 |
 | `npm run lint` | eslint，含**架构守卫**（见下） | 否 |
 | `npm test` | vitest 单测（纯逻辑，毫秒级） | 否 |
+| `npm run smoke` | 跑**真实产物** 200 tick × 2 相（常规 + CPU 高压），验证加载/导出/降级/段写入 | 否 |
 | `npm run whoami` | 账号身份 + shard 自动识别 + CPU 上限 | 1 次请求 |
 | `npm run deploy [-- --dry-run]` | 上传 `dist/main.js` 到分支 | `POST /api/user/code` |
 | `npm run watch [-- --seconds N]` | WebSocket 流式订阅 console | **否**（不占 HTTP 配额） |
@@ -64,5 +65,14 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 
 ## 当前状态
 
-- M0 已完成：四道门禁全绿，token 连通，shard 自动识别，端到端部署已验证。
-- **世界状态为 `empty`** —— 尚未放置首个 spawn，需要在 shard3 的候选房间中选定一个开局，M2 起的验收才可进行。
+- **M0 完成**：四道门禁全绿，token 连通，shard 自动识别，端到端部署已验证。
+- **M1 完成**：内核骨架全部落地（tick 管线 / CPU 降级 / heap / cache / Memory 迁移与 GC / 日志限流 / 错误隔离 / profiler / stats 段），54 单测通过。
+
+### `npm run smoke` 能证明什么、不能证明什么
+
+跑的是**真实上传产物** `dist/main.js`（不是 TS 源码），对着按文档契约建模的引擎全局跑 N tick。因此：
+
+- **能证明**：产物可加载、导出 `loop`、重复调用不崩溃、Memory 迁移只发生一次、stats 段写入且有界、CPU 降级按优先级生效且**关键阶段（spawn/assign/cleanup）从不被跳过**。
+- **不能证明移动/伤害/资源消耗/结构耐久** —— 这些只在真实引擎里存在。因此 M1–M3 的策略必须保守。
+
+> 注意 harness 的一个刻意设计：CPU 在 `loop()` **之前**计入。若在之后计入，内核看到的 `getUsed()` 恒为 0，降级路径永远不会被跑到。

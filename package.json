@@ -16,7 +16,8 @@
     "deploy": "node scripts/deploy.mjs",
     "watch": "node scripts/watch.mjs",
     "stats": "node scripts/stats.mjs",
-    "whoami": "node scripts/whoami.mjs"
+    "whoami": "node scripts/whoami.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "screeps-api": "^2.1.0"

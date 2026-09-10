@@ -284,8 +284,8 @@ flowchart LR
 
 | 里程碑 | 对应状态 | 内容 | 可观测验收标准 |
 |---|---|---|---|
-| **M0 基础设施** ✅ | — | 仓库骨架、构建/类型检查/单测/部署/观测命令、token 连通性与 shard 自动识别 | **已达成**：`typecheck`/`lint`/`test`(8 passed)/`build` 全绿；`whoami` 自动识别 shard3 与 CPU 20；守卫规则经反例测试确认会拦截违规。`deploy`/`watch`/`stats` 命令待补 |
-| **M1 内核骨架** | — | tick 管线、CPU 预算与降级、cache/heap/memory/stats/log/errors/profiler、**可观测性就位** | 空内核上线连续 200 tick 稳定；profiler 输出各阶段耗时；注入一处故意抛错，tick 不中断且错误只上报一次；Memory 大小恒定；**segment 统计曲线可在本地拉取** |
+| **M0 基础设施** ✅ | — | 仓库骨架、构建/类型检查/单测/部署/观测命令、token 连通性与 shard 自动识别 | **已达成**：`typecheck`/`lint`/`test`(8 passed)/`build` 全绿；`whoami` 自动识别 shard3 与 CPU 20；守卫规则经反例测试确认会拦截违规。`deploy`/`watch`/`stats` 均已实测（部署 1/240、console 流、段读取）|
+| **M1 内核骨架** ✅ | — | tick 管线、CPU 预算与降级、cache/heap/memory/stats/log/errors/profiler | **已达成**：54 单测通过；`npm run smoke` 跑真实产物 200 tick × 2 相（常规 + CPU 高压），9 项断言全过——含**降级确实触发**与**关键阶段从不被跳过**；Memory 迁移幂等；stats 段写入且有界 |
 | **M2 任务系统 + 角色** | — | 任务注册表与租约、角色行为表、**状态机骨架（先只实现 `BOOTSTRAP`）**、spawn manager | 轨道 A 覆盖任务全生命周期；轨道 B 回放线上快照能产出正确命令序列；线上 creep 完成 harvest → deliver 全链，死亡后自动补员 |
 | **M3 `BOOTSTRAP`→`ESTABLISHED`** | RCL 1–5 | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应、状态迁移判定 | **连续 2000 tick 无 creep 断档**（按线上实际 tick 时长折算约数小时，需实测标定）；RCL **1→5**（累计 585,200 能量）；CPU 峰值 < 20；Memory 波动 < 5% |
 | **M4 `MATURE`** | RCL 6–7 | link 链路、专用 miner、物流分层、**届时再设计** | RCL 6+；link 生效后 CPU 不升反降 |
@@ -301,8 +301,16 @@ flowchart LR
 
 ### 6.1 环境与凭据
 
-- `.env`（不入库）：`SCREEPS_TOKEN_DEPLOY`（含 `user/code`）、`SCREEPS_TOKEN_WATCH`（含 websocket 事件）、`SCREEPS_SERVER`（默认 `main`）、`SCREEPS_SHARD`。
-- 凭据文件走 screeps-api v2 支持的 `screeps.json` 格式；`fromConfig('main')` 现在要求显式传服务器名。
+- `.env`（不入库，mode 600）：
+  - `SCREEPS_TOKEN_DEPLOY` —— 需 `user/code` 权限（部署）
+  - `SCREEPS_TOKEN_WATCH` —— 需 websocket console 事件权限（观测）
+  - `SCREEPS_SERVER`（默认 `main`）
+  - `SCREEPS_SHARD` —— **默认应留空**，留空即启用自动识别（见 §1.1.2）。显式设置时优先，但与检测结果不符会告警。
+  - `SCREEPS_BRANCH`（默认 `default`）
+- **不引 dotenv**：用 Node 内置 `process.loadEnvFile()`（20.12+）。
+- **不用 `fromConfig()`**：它要求磁盘上存在 screeps 配置文件。改为手写构造
+  `new ScreepsHttpClient({ server: { url, token }, app: {} })` —— 注意 `server.url` **必须是完整 URL**，否则 axios 拿到相对路径直接 `ERR_INVALID_URL`。
+- token 拆分为两个角色，是为了缩小泄漏面，也便于分辨限流由哪条工作负载消耗。
 
 ### 6.2 命令
 
@@ -397,8 +405,9 @@ flowchart LR
 | **客户端构造方式** | `fromConfig()` 需要磁盘上的 screeps 配置文件，我们没有 | `new ScreepsHttpClient({ server: { url, token }, app: {} })`——**必须给 `server.url` 全 URL**，否则 axios 拿到相对路径报 `ERR_INVALID_URL` | `scripts/lib/client.mjs` |
 | **v2 接口改名** | `ScreepsAPI`→`ScreepsHttpClient`，方法扁平化（`userOverview`/`userWorldStartRoom`/`gameShardsInfo`/`authMe`） | 已按 v2 写 | `scripts/lib/*.mjs` |
 
-### 9.3 下一步（M0 收尾 → 开局 → M1）
+### 9.3 下一步（开局 → M2）
 
-1. 补 `scripts/deploy.mjs`（含配额记账与 60/天硬上限）、`watch.mjs`（WebSocket console）、`stats.mjs`（memory segment）。
-2. **【需要你操作】在 shard3 的 `W55S5` / `W15N45` / `W35S5` 中选定一个放置首个 spawn** —— 世界状态 `empty`，没有 spawn 则 M2 起的验收无从谈起。
-3. M1 内核骨架（tick 管线已立骨架，补 cache/heap/memory/errors/profiler/stats）。
+1. ✅ M0 收尾：`deploy.mjs` / `watch.mjs` / `stats.mjs` 已完成并实测（部署 1/240 配额记账、console 流、段读取）。
+2. ✅ M1 内核骨架：`cache` / `heap` / `memory` / `stats` / `log` / `errors` / `profiler` 全部落地，54 单测 + smoke 双相验证通过。
+3. **【需要你操作】在 shard3 的 `W55S5` / `W15N45` / `W35S5` 中选定一个放置首个 spawn** —— 世界状态 `empty`，没有 spawn 则 M2 起的验收无从谈起。
+4. M2 任务系统 + 角色 + 状态机（`BOOTSTRAP`）：开局后即可推进。
