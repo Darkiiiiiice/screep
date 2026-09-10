@@ -158,50 +158,43 @@ interface Supply {
 }
 
 /**
- * True when the room has an income source: a living harvester or one being built.
+ * Energy the spawn must keep in hand before consumers may draw from it.
  *
- * This gates whether consumers may drain the spawn, and the gate exists because
- * its absence was observed to kill the colony outright. Measured: a room with one
- * harvester and four consumers kept its spawn near zero; when the harvester
- * reached the end of its 1500-tick life, there was nothing banked to replace it.
- * The remaining creeps then took every unit the moment it arrived, so the spawn
- * could never accumulate the 200 a new harvester costs — a spiral with no way
- * out, since the only energy source left was a harvester that no longer existed.
+ * The cost of the cheapest viable harvester body — `{work, carry, move, move}` at
+ * 100 + 50 + 50 + 50. That body is what restores the room's income, and income is
+ * the only thing that refills the spawn.
  *
- * With no income, the spawn is not a buffer to draw from. It is the colony's only
- * chance of getting income back, and consumers must mine for themselves until it
- * succeeds.
+ * This is a FLOOR, not a lock, and the distinction is the whole point:
+ *
+ *   - No reserve at all (an earlier version excluded the spawn unconditionally)
+ *     starved a builder and an upgrader at zero energy beside a spawn holding
+ *     300.
+ *   - A binary reserve that engaged only once the last harvester had DIED was
+ *     still too late: measured, the spawn sat at 14 with the sole harvester
+ *     ~112 ticks from the end of its life. A death at that moment left the
+ *     colony mining by hand from zero, with no way to buy income back.
+ *
+ * Holding one harvester's worth back means a replacement is affordable the
+ * instant it is needed, at the cost of idling 250 of a 300–550 capacity. That
+ * energy is not wasted — it is the insurance premium on the only irreplaceable
+ * thing the colony owns.
  */
-function hasIncome(room: RoomView): boolean {
-  for (const creep of room.creeps) {
-    if (creep.role === 'harvester') return true;
-  }
-  for (const spawn of room.spawns) {
-    if (spawn.spawningRole === 'harvester') return true;
-    // A creep mid-build has no role recorded if our code did not set it; an
-    // unknown role is treated as absent rather than assumed, so the reserve
-    // stays pessimistic.
-  }
-  return false;
-}
+const SPAWN_RESERVE = 250;
 
 /**
  * The nearest place for a CONSUMER to obtain energy.
  *
- * Stores are preferred over raw sources so consumers do not contend with miners
- * on the same tile, and the spawn is included — an earlier version excluded it
- * unconditionally, and a builder and upgrader then starved at zero energy within
- * sight of a spawn holding 300.
- *
- * The exception is the death spiral: with no harvester alive or queued, the spawn
- * is reserved so it can accumulate a replacement. Consumers mine instead.
+ * Stores are preferred over raw sources, so consumers do not contend with miners
+ * over the same tile.
  *
  * Harvesters deliberately do NOT use this: a miner mines. See decideHarvester.
  */
 function energySupply(creep: CreepView, room: RoomView): Supply | null {
-  const stores = hasIncome(room)
-    ? energySources(room)
-    : energySources(room).filter((s) => s.type !== 'spawn');
+  // The spawn counts, but only above the reserve. Below it, consumers mine for
+  // themselves rather than spend the colony's replacement fund.
+  const stores = energySources(room).filter(
+    (s) => s.type !== 'spawn' || s.energy >= SPAWN_RESERVE,
+  );
 
   const store = nearest(creep, stores);
   if (store) {

@@ -19,32 +19,102 @@ import type { StructureWant } from '../domain/build';
 import { log } from '../kernel/log';
 
 /**
- * The ring of tiles a creep must be able to stand on to use the spawn.
+ * True when a tile is walkable terrain with nothing on it.
  *
- * Reserved permanently. Without this the placement rule "as close to the spawn
- * as possible" walls the spawn in: measured live, four extension sites plus one
- * inert creep occupied five of the spawn's eight neighbours, and a harvester
- * carrying a full load bounced between two tiles for 40+ ticks, never reaching
- * the spawn to deliver. Construction sites block pathfinding exactly as built
- * structures do, so this is not a temporary state.
- *
- * Eight tiles out of roughly 1500 walkable is no cost; a spawn that cannot be
- * reached is total.
+ * The outermost ring is kept clear, since a structure on the border can leave a
+ * creep no way round it.
  */
-function isSpawnApproachTile(spawn: StructureSpawn, x: number, y: number): boolean {
-  return Math.max(Math.abs(x - spawn.pos.x), Math.abs(y - spawn.pos.y)) <= 1;
-}
-
-/** True when a tile is walkable terrain with nothing on it. */
-function isFree(room: Room, spawn: StructureSpawn, x: number, y: number): boolean {
-  // The outermost ring is kept clear: a structure on the border can leave a
-  // creep with no way round it.
+function isFree(room: Room, x: number, y: number): boolean {
   if (x < 1 || y < 1 || x > 48 || y > 48) return false;
-  if (isSpawnApproachTile(spawn, x, y)) return false;
   if (room.getTerrain().get(x, y) === TERRAIN_MASK_WALL) return false;
   if (room.lookForAt(LOOK_STRUCTURES, x, y).length > 0) return false;
   if (room.lookForAt(LOOK_CONSTRUCTION_SITES, x, y).length > 0) return false;
   return true;
+}
+
+/**
+ * A tile a creep can stand on, ignoring creep positions.
+ *
+ * Creeps move, so they are not treated as obstacles in these reachability
+ * checks — the question is whether the ROOM's layout permits a route.
+ */
+function isWalkable(room: Room, x: number, y: number, extraBlocked: string[]): boolean {
+  if (x < 1 || y < 1 || x > 48 || y > 48) return false;
+  const key = `${String(x)},${String(y)}`;
+  if (extraBlocked.includes(key)) return false;
+  if (room.getTerrain().get(x, y) === TERRAIN_MASK_WALL) return false;
+  if (room.lookForAt(LOOK_STRUCTURES, x, y).length > 0) return false;
+  if (room.lookForAt(LOOK_CONSTRUCTION_SITES, x, y).length > 0) return false;
+  return true;
+}
+
+/** Any walkable tile orthogonally or diagonally adjacent to `target`. */
+function approaches(room: Room, target: { x: number; y: number }): string[] {
+  const out: string[] = [];
+  for (let dx = -1; dx <= 1; dx += 1) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      if (dx === 0 && dy === 0) continue;
+      const x = target.x + dx;
+      const y = target.y + dy;
+      if (isWalkable(room, x, y, [])) out.push(`${String(x)},${String(y)}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Could a creep get from the spawn to a source, given extra blocked tiles?
+ *
+ * This is the invariant that matters, checked directly rather than approximated
+ * by a geometric rule. An earlier version reserved only the spawn's eight
+ * neighbours, which is not sufficient: movement is 8-directional, so blocking
+ * specific tiles at radius 2 can still seal a corridor while the ring stays
+ * clear. Measured live, the spawn became unreachable and a loaded harvester
+ * bounced between two tiles for 40+ ticks without ever delivering.
+ *
+ * A test of the actual property also cannot be outgrown. Any rule about which
+ * tiles to avoid is a guess about which arrangements are dangerous; a
+ * breadth-first search over the room answers the question.
+ */
+export function spawnReachesSource(room: Room, spawn: StructureSpawn, extraBlocked: string[]): boolean {
+  const sources = room.find(FIND_SOURCES);
+  if (sources.length === 0) return true;
+
+  const targets: Record<string, true> = {};
+  for (const source of sources) {
+    for (const tile of approaches(room, source.pos)) targets[tile] = true;
+  }
+
+  // Start from the spawn's own walkable neighbours: a creep cannot stand on it.
+  const start = approaches(room, spawn.pos);
+  const seen: Record<string, true> = {};
+  const queue = start.slice();
+
+  for (const tile of start) seen[tile] = true;
+  if (targets[start[0] ?? ''] === true) return true;
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === undefined) break;
+    if (targets[current] === true) return true;
+
+    const [cx, cy] = current.split(',').map(Number) as [number, number];
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = cx + dx;
+        const ny = cy + dy;
+        const key = `${String(nx)},${String(ny)}`;
+        if (seen[key] === true) continue;
+        if (!isWalkable(room, nx, ny, extraBlocked)) continue;
+
+        seen[key] = true;
+        queue.push(key);
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -88,8 +158,8 @@ function search(
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
 
         const x = spawn.pos.x + dx;
-        const y = spawn.pos.y + dy;
-        if (!isFree(room, spawn, x, y)) continue;
+      const y = spawn.pos.y + dy;
+        if (!isFree(room, x, y)) continue;
         if (avoidWalls && touchesWall(room, x, y)) continue;
 
         spots.push({ x, y });
@@ -126,15 +196,34 @@ export function findSpots(room: Room, spawn: StructureSpawn, count: number): { x
  *
  * @returns how many sites were removed
  */
-export function clearSpawnApproach(room: Room): number {
+export function clearBlockingSites(room: Room): number {
   const spawn = room.find(FIND_MY_SPAWNS)[0];
   if (!spawn) return 0;
 
+  const existing = room.find(FIND_MY_CONSTRUCTION_SITES);
+  if (spawnReachesSource(room, spawn, [])) return 0;
+
+  // The room is already walled. Remove sites until a route exists again,
+  // closest to the spawn first: those are the ones most likely to be the seal,
+  // and the ones whose removal reopens the most space.
+  const candidates = existing
+    .slice()
+    .sort(
+      (a, b) =>
+        Math.max(Math.abs(a.pos.x - spawn.pos.x), Math.abs(a.pos.y - spawn.pos.y)) -
+        Math.max(Math.abs(b.pos.x - spawn.pos.x), Math.abs(b.pos.y - spawn.pos.y)),
+    );
+
   let removed = 0;
-  for (const site of room.find(FIND_MY_CONSTRUCTION_SITES)) {
-    if (!isSpawnApproachTile(spawn, site.pos.x, site.pos.y)) continue;
+  const blocked: string[] = [];
+  for (const site of candidates) {
+    blocked.push(`${String(site.pos.x)},${String(site.pos.y)}`);
+    // `remove()` takes effect next tick, so test against the simulated set.
+    const stillSealed = !spawnReachesSource(room, spawn, blocked.map((k) => k));
+    if (stillSealed) continue;
     if (site.remove() === OK) removed += 1;
   }
+
   return removed;
 }
 
@@ -151,7 +240,7 @@ export function placeWanted(room: Room, wants: StructureWant[], roomViewForLog: 
   // already walled in has its structure ceiling met, so `wants` is empty — and
   // returning early here meant the repair never ran at all, leaving the spawn
   // sealed and the colony permanently stalled.
-  const cleared = clearSpawnApproach(room);
+  const cleared = clearBlockingSites(room);
   if (cleared > 0) {
     log(
       'warn',
@@ -179,6 +268,19 @@ export function placeWanted(room: Room, wants: StructureWant[], roomViewForLog: 
     }
 
     for (const spot of spots) {
+      // Verify the placement keeps the spawn connected to a source. A site that
+      // seals the room is worse than no site at all — it costs the whole economy,
+      // not just the structure.
+      const tentatively = [`${String(spot.x)},${String(spot.y)}`];
+      if (!spawnReachesSource(room, spawn, tentatively)) {
+        log(
+          'warn',
+          `build:${roomViewForLog.name}:connectivity`,
+          `${roomViewForLog.name} skipped ${want.structureType} at (${String(spot.x)},${String(spot.y)}): would block the spawn`,
+        );
+        continue;
+      }
+
       const code = room.createConstructionSite(
         spot.x,
         spot.y,

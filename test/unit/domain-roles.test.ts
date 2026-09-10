@@ -287,23 +287,22 @@ describe('energy source preference', () => {
     expect((intent as { targetId: string }).targetId).toBe('spawn1');
   });
 
-  it('reserves the spawn instead, when no harvester exists to refill it', () => {
+  it('holds back enough of the spawn to buy a replacement harvester', () => {
     // The death spiral this prevents, observed live: one harvester, four
-    // consumers, spawn pinned near zero. The harvester reached the end of its
-    // 1500-tick life, and the remaining creeps took every arriving unit, so the
-    // spawn could never accumulate the 200 a replacement costs. With no income,
-    // the spawn is the colony's only route back to income and must not be spent.
+    // consumers, spawn pinned low. When the harvester reached the end of its
+    // 1500-tick life there was nothing banked to replace it, and the remaining
+    // creeps took every arriving unit — so the spawn could never accumulate the
+    // ~250 a harvester body costs, and nothing but a harvester refills it.
+    //
+    // Below the reserve, consumers mine for themselves instead.
     const view = room({
       sources: [source('src1', 24, 5)],
-      stores: [store('spawn1', 'spawn', 24, 10, 300, 300)],
+      stores: [store('spawn1', 'spawn', 24, 10, 249, 300)],
     });
 
-    // No harvester in `view.creeps`, so the reserve applies: the creep heads for
-    // the source even though the spawn beside it is full.
     const intent = decide(creep({ role: 'upgrader', energy: 0, x: 24, y: 11 }), null, view);
 
     expect(intent?.kind).not.toBe('withdraw');
-    // Either mining in place if adjacent, or walking to the source.
     if (intent?.kind === 'approach') {
       expect((intent as { targetId: string }).targetId).toBe('src1');
     } else {
@@ -311,27 +310,25 @@ describe('energy source preference', () => {
     }
   });
 
-  it('treats a harvester still in the spawn queue as income', () => {
-    // A replacement being built already counts, so consumers resume draining as
-    // soon as the colony has committed to restoring income.
+  it('lets consumers draw the surplus above the reserve', () => {
+    // The floor is not a lock. Measured earlier: excluding the spawn outright
+    // starved a builder and an upgrader at zero energy beside a spawn holding
+    // 300. A spawn at full capacity holds nothing back that a replacement needs.
     const view = room({
       stores: [store('spawn1', 'spawn', 24, 10, 300, 300)],
-      spawns: [
-        {
-          id: 'spawn1',
-          name: 'Spawn1',
-          x: 24,
-          y: 10,
-          room: 'W1N1',
-          energy: 300,
-          energyAvailable: 300,
-          energyCapacityAvailable: 550,
-          spawning: true,
-          spawningName: 'harvester-W1N1-1',
-          spawningRole: 'harvester',
-          spawnTicksRemaining: 5,
-        },
-      ],
+    });
+
+    const intent = decide(creep({ role: 'upgrader', energy: 0, x: 24, y: 11 }), null, view);
+    expect(intent?.kind).toBe('withdraw');
+    expect((intent as { targetId: string }).targetId).toBe('spawn1');
+  });
+
+  it('allows a withdrawal that crosses the reserve, draining down to it', () => {
+    // Withdrawals are not clamped to the remainder: the check bounds what the
+    // spawn is OFFERED at, so the level settles just below the reserve rather
+    // than hovering above it.
+    const view = room({
+      stores: [store('spawn1', 'spawn', 24, 10, 251, 300)],
     });
 
     const intent = decide(creep({ role: 'upgrader', energy: 0, x: 24, y: 11 }), null, view);
