@@ -23,6 +23,8 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 | `npm run lint` | eslint，含**架构守卫**（见下） | 否 |
 | `npm test` | vitest 单测（纯逻辑，毫秒级） | 否 |
 | `npm run smoke` | 跑**真实产物** 200 tick × 2 相（常规 + CPU 高压），验证加载/导出/降级/段写入 | 否 |
+| `npm run engine` | 首次安装本地真实引擎（Node 24 + GCC 15，约数分钟） | 否 |
+| `npm run sim [-- --ticks N]` | **本地真实引擎**跑产物：真实寻路/疲劳/能量流，断言**结果** | 否 |
 | `npm run whoami` | 账号身份 + shard 自动识别 + CPU 上限 | 1 次请求 |
 | `npm run deploy [-- --dry-run]` | 上传 `dist/main.js` 到分支 | `POST /api/user/code` |
 | `npm run watch [-- --seconds N]` | WebSocket 流式订阅 console | **否**（不占 HTTP 配额） |
@@ -41,6 +43,33 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 | `GET /api/user/memory-segment` | **360 / 小时**（比 Memory 宽 6 倍） |
 
 两个直接后果：**部署本身是稀缺资源**（`deploy.mjs` 自限 60/天，留余量应对线上故障），**统计走 segment 而非 Memory**。日常观测优先用 `watch`（WebSocket 不占配额）。
+
+## 三层验证（各管一段，不可互相替代）
+
+| 层 | 验证什么 | 管不到什么 |
+|---|---|---|
+| `npm test`（204 项） | 纯决策逻辑、租约、状态阈值、身体成本 | **物理**：无引擎 |
+| `npm run smoke` | 产物可加载、CPU 降级、段写入、`loop` 导出 | `moveTo` 被桩掉，无寻路 |
+| `npm run sim` | **真实引擎**：寻路、疲劳、能量流、建造、吞吐 | 需先装引擎 |
+
+**为什么三层都要**：本期线上踩到的 bug **全部是物理层失败**（寻路被静止 creep 堵死、缓存路径穿过被占格、spawn 被自家工地围死、3 tick/格身体），
+对前两层结构性不可见。而 `sim` 断言的是**结果而非意图** —— 意图一直是对的。
+
+### 本地引擎为何需要特定工具链
+
+| 组合 | 结果 |
+|---|---|
+| Node 26 + GCC 16 | 失败：V8 13.6 改了 `GetAlignedPointerFromInternalField`；Nan 模块编不过 |
+| Node 24 + GCC 16 | 失败：isolated-vm 自身 timer 模板错配 |
+| **Node 24 + GCC 15** | **成功** |
+
+引擎装在 `.engine/`（独立 Node 24 与 GCC 15），项目本身仍在 Node 26。
+
+### 部署门禁
+
+`npm run deploy` 会**先跑 `npm run sim`**，通过才上传（`SKIP_SIM=1` 可覆盖）。
+动机是实测代价：一次部署消耗 240/天 配额中的 1 次，再以 4 秒/tick 观察数分钟，
+才能发现本地 245 ms/tick 就能复现的 bug。
 
 ## 架构不变式
 
