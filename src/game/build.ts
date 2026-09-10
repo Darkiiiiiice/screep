@@ -137,14 +137,14 @@ function touchesWall(room: Room, x: number, y: number): boolean {
 }
 
 /**
- * One pass of the ring search around the spawn.
+ * One pass of the ring search around an anchor tile.
  *
  * @param avoidWalls reject tiles touching a wall
  * @returns up to `count` free tiles, nearest first
  */
 function search(
   room: Room,
-  spawn: StructureSpawn,
+  anchor: { x: number; y: number },
   count: number,
   avoidWalls: boolean,
 ): { x: number; y: number }[] {
@@ -157,8 +157,8 @@ function search(
         // Ring only: the interior was covered at a smaller radius.
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
 
-        const x = spawn.pos.x + dx;
-      const y = spawn.pos.y + dy;
+        const x = anchor.x + dx;
+        const y = anchor.y + dy;
         if (!isFree(room, x, y)) continue;
         if (avoidWalls && touchesWall(room, x, y)) continue;
 
@@ -171,7 +171,7 @@ function search(
 }
 
 /**
- * Find tiles for a structure, nearest the spawn first.
+ * Find tiles for a structure, nearest the anchor first.
  *
  * Two passes: clear of walls where possible, then anywhere free. The second pass
  * is what stops a room whose open ground is mostly walled edges from refusing to
@@ -179,12 +179,39 @@ function search(
  *
  * @returns the chosen tiles, possibly fewer than requested when the room is full
  */
-export function findSpots(room: Room, spawn: StructureSpawn, count: number): { x: number; y: number }[] {
-  const preferred = search(room, spawn, count, true);
+export function findSpots(
+  room: Room,
+  anchor: { x: number; y: number },
+  count: number,
+): { x: number; y: number }[] {
+  const preferred = search(room, anchor, count, true);
   if (preferred.length >= count) return preferred;
 
-  const anyFree = search(room, spawn, count, false);
+  const anyFree = search(room, anchor, count, false);
   return anyFree.length > preferred.length ? anyFree : preferred;
+}
+
+/**
+ * Where a structure type should be anchored.
+ *
+ * The anchor is not a detail — it decides whether the structure does its job at
+ * all. Measured: containers were placed beside the spawn by a spawn-anchored
+ * search, four and six tiles from the nearest source. A container exists to
+ * buffer energy AT the mining site, so a container away from the source leaves
+ * the harvester walking the full round trip and buys nothing; the throughput
+ * estimate that justified building it (2.08 -> 2.8 energy/tick) assumed the
+ * container was adjacent to the source.
+ *
+ * Extensions and towers are the opposite: they are delivery targets, so distance
+ * to the spawn is distance per delivery, repeated for the life of the room.
+ */
+function anchorsFor(room: Room, kind: string, spawn: StructureSpawn): { x: number; y: number }[] {
+  if (kind === 'container') {
+    // One container per source. A source with a container beside it is what turns
+    // a cross-room walk into a step.
+    return room.find(FIND_SOURCES).map((s) => ({ x: s.pos.x, y: s.pos.y }));
+  }
+  return [{ x: spawn.pos.x, y: spawn.pos.y }];
 }
 
 /**
@@ -254,39 +281,53 @@ export function placeWanted(room: Room, wants: StructureWant[], roomViewForLog: 
   let placed = 0;
 
   for (const want of wants) {
-    const spots = findSpots(room, spawn, want.missing);
+    const anchors = anchorsFor(room, want.structureType, spawn);
+    let remaining = want.missing;
 
-    if (spots.length === 0) {
+    for (const anchor of anchors) {
+      if (remaining <= 0) break;
+
+      // One spot per anchor for containers, so two sources get one each rather
+      // than both containers landing beside the same source.
+      const perAnchor = want.structureType === 'container' ? 1 : remaining;
+      const spots = findSpots(room, anchor, perAnchor);
+
+      for (const spot of spots) {
+        if (remaining <= 0) break;
+
+        // Verify the placement keeps the spawn connected to a source. A site that
+        // seals the room is worse than no site at all — it costs the whole
+        // economy, not just the structure.
+        const tentatively = [`${String(spot.x)},${String(spot.y)}`];
+        if (!spawnReachesSource(room, spawn, tentatively)) {
+          log(
+            'warn',
+            `build:${roomViewForLog.name}:connectivity`,
+            `${roomViewForLog.name} skipped ${want.structureType} at (${String(spot.x)},${String(spot.y)}): would block the spawn`,
+          );
+          continue;
+        }
+
+        const code = room.createConstructionSite(
+          spot.x,
+          spot.y,
+          want.structureType as BuildableStructureConstant,
+        );
+        if (code === OK) {
+          placed += 1;
+          remaining -= 1;
+        }
+      }
+    }
+
+    if (remaining === want.missing) {
       // Running out of room caps the economy, and the fix (clear something, or
       // expand) is a decision rather than a retry — so it is worth saying once.
       log(
         'warn',
         `build:${room.name}:${want.structureType}`,
-        `${roomViewForLog.name} has no free tile for ${want.structureType} (ceiling ${String(want.ceiling)})`,
+        `${roomViewForLog.name} found no legal tile for ${want.structureType} (ceiling ${String(want.ceiling)})`,
       );
-      continue;
-    }
-
-    for (const spot of spots) {
-      // Verify the placement keeps the spawn connected to a source. A site that
-      // seals the room is worse than no site at all — it costs the whole economy,
-      // not just the structure.
-      const tentatively = [`${String(spot.x)},${String(spot.y)}`];
-      if (!spawnReachesSource(room, spawn, tentatively)) {
-        log(
-          'warn',
-          `build:${roomViewForLog.name}:connectivity`,
-          `${roomViewForLog.name} skipped ${want.structureType} at (${String(spot.x)},${String(spot.y)}): would block the spawn`,
-        );
-        continue;
-      }
-
-      const code = room.createConstructionSite(
-        spot.x,
-        spot.y,
-        want.structureType as BuildableStructureConstant,
-      );
-      if (code === OK) placed += 1;
     }
   }
 

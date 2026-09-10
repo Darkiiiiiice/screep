@@ -50,7 +50,12 @@ const { ScreepsServer, TerrainMatrix } = requireEngine('screeps-server-mockup');
 
 const args = process.argv.slice(2);
 const ticksFlag = args.indexOf('--ticks');
-const TICKS = ticksFlag !== -1 ? Number(args[ticksFlag + 1]) : 300;
+// 600 by default: the interesting paths (extensions, containers, the ESTABLISHED
+// transition) need long enough for the colony to reach them. A 300-tick default
+// ran only to RCL 1, where the container check had nothing to inspect and would
+// have reported a vacuous pass — which is worse than no check, because it reads
+// as evidence.
+const TICKS = ticksFlag !== -1 ? Number(args[ticksFlag + 1]) : 600;
 
 const out = console;
 const bundleSource = readFileSync(BUNDLE, 'utf8');
@@ -88,10 +93,18 @@ async function buildWorld() {
 
   await server.world.addRoom('W0N1');
   await server.world.setTerrain('W0N1', terrain);
+  // RCL 2 from the start, deliberately: that is the level where the build paths
+  // (extensions, containers, then the ESTABLISHED transition) actually run. An
+  // earlier version started at RCL 1, where the container check passed VACUOUSLY
+  // — no container is even buildable below level 2, so there was nothing to
+  // inspect and the check proved nothing.
+  //
+  // progressTotal is large so progress never resets on a level-up, which keeps
+  // the throughput assertion comparable across the run.
   await server.world.addRoomObject('W0N1', 'controller', CONTROLLER.x, CONTROLLER.y, {
-    level: 1,
+    level: 2,
     progress: 0,
-    progressTotal: 200,
+    progressTotal: 100000,
   });
   for (const s of SOURCES) {
     await server.world.addRoomObject('W0N1', 'source', s.x, s.y, {
@@ -142,8 +155,17 @@ async function readState(server) {
     controllerLevel: controller ? (controller.level ?? -1) : -1,
     controllerProgress: controller ? (controller.progress ?? -1) : -1,
     sites: byType('constructionSite').length,
+    objects: byType('constructionSite').map((c) => ({
+      structureType: c.structureType,
+      x: c.x,
+      y: c.y,
+    })),
     extensions: byType('extension').length,
     containers: byType('container').length,
+    /** Completed structures, so a finished container counts as well as a site. */
+    built: byType('container')
+      .concat(byType('extension'))
+      .map((c) => ({ structureType: c.structureType, x: c.x, y: c.y })),
     creeps: byType('creep').map((c) => ({
       name: c.name,
       x: c.x,
@@ -285,7 +307,32 @@ if (first && last) {
     `${progressRate.toFixed(3)}/tick (floor 0.30)`,
   );
 
-  // 7. The AI's own error channel stayed quiet. Console lines are captured, so
+  // 7. Containers end up beside a source, which is the only place they help.
+  //
+  // Measured on the live room: a spawn-anchored search put containers four and
+  // six tiles from the nearest source, where they buffer nothing and the
+  // harvester keeps walking the full trip. The engine can see adjacency directly.
+  const objectives = [];
+  const objectSamples = (last.objects ?? []).concat(last.built ?? []);
+  const containerSamples = objectSamples.filter((o) => o.structureType === 'container');
+
+  // A vacuous pass is not a pass: if the run never produced a container, this
+  // check has proven nothing about placement.
+  if (containerSamples.length === 0) {
+    objectives.push(
+      `no container was started in ${String(samples.length)} ticks (check would be vacuous — raise --ticks)`,
+    );
+  }
+
+  for (const c of containerSamples) {
+    const nearest = Math.min(
+      ...SOURCES.map((sPos) => Math.max(Math.abs(c.x - sPos.x), Math.abs(c.y - sPos.y))),
+    );
+    if (nearest > 2) objectives.push(`container at (${String(c.x)},${String(c.y)}) is ${String(nearest)} tiles from a source`);
+  }
+  check('containers sit beside a source', objectives.length === 0, objectives.join('; '));
+
+  // 8. The AI's own error channel stayed quiet. Console lines are captured, so
   //    an error flood is visible as repeated `[error]` lines.
   const errorLines = botLogs.filter((l) => l.includes('[error]'));
   check('no error flood from the AI', errorLines.length <= 3, `${String(errorLines.length)} error lines`);
@@ -301,6 +348,14 @@ out.log(`[sim] ${String(TICKS)} ticks in ${elapsed.toFixed(1)}s (${((elapsed / T
 if (last) {
   out.log(
     `[sim] final: RCL${String(last.controllerLevel)} progress=${String(last.controllerProgress)} creeps=${String(last.creeps.length)} spawn=${String(last.spawnEnergy)} sites=${String(last.sites)}`,
+  );
+  out.log(
+    `[sim] sites by type: ${JSON.stringify(
+      (last.objects ?? []).reduce((a, o) => {
+        a[o.structureType] = (a[o.structureType] ?? 0) + 1;
+        return a;
+      }, {}),
+    )}`,
   );
 }
 
