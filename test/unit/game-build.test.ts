@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installFakeEngine, type FakeEngine } from '../fixtures/engine';
-import { placeWanted, spawnReachesSource } from '@/game/build';
+import { placeWanted, reclaimMisplacedContainers, spawnReachesSource } from '@/game/build';
 import type { RoomView } from '@/domain/types';
 
 // The engine injects these as globals; the module reads them at call time.
@@ -11,6 +11,7 @@ beforeEach(() => {
   Object.assign(globalThis, {
     TERRAIN_MASK_WALL: 1,
     OK: 0,
+    STRUCTURE_CONTAINER: 'container',
     LOOK_STRUCTURES: 101,
     LOOK_CONSTRUCTION_SITES: 115,
     FIND_SOURCES: 105,
@@ -56,9 +57,17 @@ function room(parts: {
     structureType: 'spawn',
   };
 
+  const removed: { x: number; y: number }[] = [];
   const sites = [...blocked].map((k) => {
     const [x, y] = k.split(',').map(Number) as [number, number];
-    return { pos: { x, y } };
+    return {
+      pos: { x, y },
+      structureType: 'container',
+      remove: () => {
+        removed.push({ x, y });
+        return 0; // OK
+      },
+    };
   });
 
   const find = (t: number): unknown[] => {
@@ -77,6 +86,7 @@ function room(parts: {
     getTerrain: () => terrain,
     find,
     created,
+    removed,
     createConstructionSite: (x: number, y: number, structureType: string) => {
       created.push({ x, y, structureType });
       return 0; // OK
@@ -265,5 +275,71 @@ describe('placement anchor', () => {
     const spawn = { pos: { x: 25, y: 25 } } as StructureSpawn;
     const blocked = placed.map((c) => `${String(c.x)},${String(c.y)}`);
     expect(spawnReachesSource(r, spawn, blocked)).toBe(true);
+  });
+});
+
+
+describe('misplaced container reclaim', () => {
+  /**
+   * Why this exists, measured on the live room: `structureWants` counts sites
+   * under construction toward the ceiling, so two wrongly-placed containers at
+   * RCL 2 (ceiling 2) fill the quota and the CORRECT pair can never be placed.
+   * The two live sites sat 4 and 6 tiles from the nearest source — they would
+   * have been built, delivering none of the throughput they were paid for, and
+   * the fix would not have taken effect until RCL 3 raised the ceiling to 5.
+   */
+  const source = (x: number, y: number) => ({ pos: { x, y } }) as unknown as Source;
+
+  it('removes a container site that is not beside a source', () => {
+    const { room: r } = room({
+      spawn: [25, 25],
+      sources: [[10, 10]],
+      blocked: ['25,25'], // far from the source at (10,10)
+    });
+
+    const removed = reclaimMisplacedContainers(r, [source(10, 10)]);
+    expect(removed).toBe(1);
+  });
+
+  it('keeps a container site that is beside a source', () => {
+    const { room: r } = room({
+      spawn: [25, 25],
+      sources: [[10, 10]],
+      blocked: ['11,10'], // adjacent to the source
+    });
+
+    expect(reclaimMisplacedContainers(r, [source(10, 10)])).toBe(0);
+  });
+
+  it('tolerates a two-tile gap, matching the placement search', () => {
+    const { room: r } = room({
+      spawn: [25, 25],
+      sources: [[10, 10]],
+      blocked: ['12,12'],
+    });
+
+    expect(reclaimMisplacedContainers(r, [source(10, 10)])).toBe(0);
+  });
+
+  it('does nothing when the room has no source to anchor to', () => {
+    // Without a source the adjacency question is unanswerable, and removing on a
+    // guess would destroy work for no reason.
+    const { room: r } = room({ spawn: [25, 25], sources: [], blocked: ['25,25'] });
+    expect(reclaimMisplacedContainers(r, [])).toBe(0);
+  });
+
+  it('runs before the want list is consulted, so the slot frees up', () => {
+    // The reclaim has to be reachable even when `wants` is empty, which is the
+    // case that matters: containers at the ceiling produce no wants at all.
+    const { room: r } = room({
+      spawn: [25, 25],
+      sources: [[10, 10]],
+      blocked: ['25,25'],
+    });
+
+    placeWanted(r, [], { name: 'W1N1' } as RoomView);
+
+    const removed = (r as unknown as { removed: { x: number; y: number }[] }).removed;
+    expect(removed).toHaveLength(1);
   });
 });

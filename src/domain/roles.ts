@@ -209,9 +209,20 @@ function recoverIncome(creep: CreepView, room: RoomView): Intent | null {
 /**
  * Energy the spawn must keep in hand before consumers may draw from it.
  *
- * The cost of the cheapest viable harvester body — `{work, carry, move, move}` at
- * 100 + 50 + 50 + 50. That body is what restores the room's income, and income is
- * the only thing that refills the spawn.
+ * Set to cover a full-speed harvester body, `{work, carry, move, move}` at
+ * 100 + 50 + 50 + 50 = 250. Measured against `designForRole` what the colony can
+ * actually buy is:
+ *
+ *   budget 200 → {work, carry, move}        200  (moves at 2 ticks/tile)
+ *   budget 250 → {work, carry, move, move}  250  (moves at 1 tick/tile)
+ *   budget 150 → null
+ *
+ * So the true minimum is 200 via the movement-imbalanced fallback, and 250 buys
+ * the full-speed version. The reserve is set at the higher figure deliberately:
+ * a reserve exists to guarantee a *recovery*, and paying 50 extra to halve the
+ * replacement's travel time is worth it at the one moment it matters. Note the
+ * reserve cannot lock the colony out either way — `planSpawns` budgets from
+ * `energyAvailable`, so at 200–249 it will build the slower body and recover.
  *
  * This is a FLOOR, not a lock, and the distinction is the whole point:
  *

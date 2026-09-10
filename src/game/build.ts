@@ -215,6 +215,50 @@ function anchorsFor(room: Room, kind: string, spawn: StructureSpawn): { x: numbe
 }
 
 /**
+ * How close a container must be to a source to be worth building.
+ *
+ * The same figure the placement search uses: a container buffers energy at the
+ * mining site, so one further away than a step leaves the harvester walking.
+ */
+const CONTAINER_ADJACENCY = 2;
+
+/**
+ * Remove container sites that are nowhere near a source.
+ *
+ * This is a MIGRATION, not a routine step, and it exists because the ceiling rule
+ * makes a misplaced site self-perpetuating: `structureWants` counts sites under
+ * construction toward the ceiling, so two wrong containers at RCL 2 fill the
+ * quota of two and the correct pair can never be placed. Measured on the live
+ * room — two container sites sat 4 and 6 tiles from the nearest source, and
+ * without this they would have been built, delivering none of the throughput the
+ * containers were paid for, with the fix only taking effect at RCL 3 when the
+ * ceiling rises to 5.
+ *
+ * Only SITES are reclaimed. A built container cannot be moved without destroying
+ * it, so a wrong one is left alone; this is about not spending energy on a
+ * mistake that has not been paid for yet.
+ *
+ * @returns how many sites were removed
+ */
+export function reclaimMisplacedContainers(room: Room, sources: Source[]): number {
+  if (sources.length === 0) return 0;
+
+  let removed = 0;
+  for (const site of room.find(FIND_MY_CONSTRUCTION_SITES)) {
+    if (site.structureType !== STRUCTURE_CONTAINER) continue;
+
+    const nearest = Math.min(
+      ...sources.map((s) => Math.max(Math.abs(site.pos.x - s.pos.x), Math.abs(site.pos.y - s.pos.y))),
+    );
+    if (nearest <= CONTAINER_ADJACENCY) continue;
+
+    if (site.remove() === OK) removed += 1;
+  }
+
+  return removed;
+}
+
+/**
  * Remove sites that sit on the spawn's approach ring.
  *
  * Repairs rooms built before the ring was reserved. The sites are discarded
@@ -273,6 +317,18 @@ export function placeWanted(room: Room, wants: StructureWant[], roomViewForLog: 
       'warn',
       `build:${roomViewForLog.name}:clear`,
       `${roomViewForLog.name} cleared ${String(cleared)} site(s) blocking the spawn approach`,
+    );
+  }
+
+  // Migration, and it must run before the want list is consulted: a misplaced
+  // container occupies a slot in the ceiling, so reclaiming it is what frees the
+  // slot for a correct one in the SAME tick.
+  const reclaimed = reclaimMisplacedContainers(room, room.find(FIND_SOURCES));
+  if (reclaimed > 0) {
+    log(
+      'warn',
+      `build:${roomViewForLog.name}:reclaim`,
+      `${roomViewForLog.name} reclaimed ${String(reclaimed)} misplaced container site(s)`,
     );
   }
 
