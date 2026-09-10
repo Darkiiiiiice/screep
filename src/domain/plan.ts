@@ -67,25 +67,27 @@ export function planTasks(
   }
 
   // Upgrading keeps the controller alive and is the only path to the next RCL.
-  // Skipped under threat: a controller that downgrades is recoverable, a colony
-  // that runs out of creeps is not.
+  //
+  // Planned unconditionally. An earlier version skipped this under threat as a
+  // way of "not feeding a doomed controller", which was inert: `decideUpgrader`
+  // never reads its task, so the task was pruned every tick while the creep
+  // upgraded anyway. The threat response now lives in `decideUpgrader`, the one
+  // place it can take effect. See domain/roles.ts.
   const controller = room.controller;
-  if (room.hostiles.length === 0) {
-    const task = addTask(
-      board,
-      {
-        kind: 'upgrade',
-        targetId: controller.id,
-        room: room.name,
-        role: 'upgrader',
-        // Priority scales with urgency: as the downgrade timer runs down this
-        // must outrank routine work rather than wait its turn.
-        priority: controller.ticksToDowngrade < 5000 ? 10 : 0,
-      },
-      now,
-    );
-    want(task.key);
-  }
+  const task = addTask(
+    board,
+    {
+      kind: 'upgrade',
+      targetId: controller.id,
+      room: room.name,
+      role: 'upgrader',
+      // Priority scales with urgency: as the downgrade timer runs down this
+      // must outrank routine work rather than wait its turn.
+      priority: controller.ticksToDowngrade < 5000 ? 10 : 0,
+    },
+    now,
+  );
+  want(task.key);
 
   // One site per task, so several builders work in parallel instead of queueing
   // behind a single "build something" job.

@@ -48,6 +48,26 @@ function room(overrides: Partial<RoomView> = {}): RoomView {
   };
 }
 
+/**
+ * The spawn appears in BOTH views: `stores` for deposits, `spawns` for the
+ * banking check. Setting only one is a trap that has now caught a test twice —
+ * `room.spawns[0]` is then undefined and every banking path returns null.
+ */
+const spawnAt = (energy: number, capacity = 300): SpawnView => ({
+  id: 'spawn1',
+  name: 'Spawn1',
+  x: 24,
+  y: 10,
+  room: 'W1N1',
+  energy,
+  energyAvailable: energy,
+  energyCapacityAvailable: capacity,
+  spawning: false,
+  spawningName: null,
+  spawningRole: null,
+  spawnTicksRemaining: 0,
+});
+
 describe('rangeBetween', () => {
   it('is Chebyshev distance, matching 8-directional movement', () => {
     // Movement is 8-directional, so a diagonal step covers both axes at once.
@@ -266,23 +286,6 @@ describe('income recovery', () => {
   // builder spends it on a site. Neither deposits, so nothing could accumulate
   // the ~250 a replacement harvester costs. The colony recovered only because a
   // dropped pile happened to decay into the spawn, one unit per tick.
-  /** The spawn appears in BOTH views: `stores` for deposits, `spawns` for the
-   * recovery check. Setting only one is a trap the first version fell into. */
-  const spawnAt = (energy: number, capacity = 300): SpawnView => ({
-    id: 'spawn1',
-    name: 'Spawn1',
-    x: 24,
-    y: 10,
-    room: 'W1N1',
-    energy,
-    energyAvailable: energy,
-    energyCapacityAvailable: capacity,
-    spawning: false,
-    spawningName: null,
-    spawningRole: null,
-    spawnTicksRemaining: 0,
-  });
-
   const noIncome = (overrides: Partial<RoomView> = {}): RoomView =>
     room({
       stores: [store('spawn1', 'spawn', 24, 10, 100, 300)],
@@ -517,5 +520,61 @@ describe('ownership safety', () => {
     });
 
     expect(decide(creep({ role: 'upgrader', energy: 50 }), null, view)).toBeNull();
+  });
+});
+
+
+describe('threat withdrawal', () => {
+  /**
+   * The policy this covers used to be inert. It lived in `planTasks` as "do not
+   * create the upgrade task while hostiles are present" — but `decideUpgrader`
+   * never reads its task, so the controller kept advancing with a hostile in the
+   * room. Measured against the real engine: the upgrade task was pruned every
+   * tick and progress was unaffected.
+   *
+   * These assert the intent a consumer observes, not the task board.
+   */
+  const upgrader = (overrides: Partial<CreepView> = {}) =>
+    creep({ role: 'upgrader', x: 43, y: 16, energy: 50, ...overrides });
+
+  it('upgrades normally when the room is clear', () => {
+    // The contrast case: without this, the threat tests below could pass because
+    // the upgrader never upgrades at all.
+    const intent = decide(upgrader(), null, room());
+    expect(intent?.kind).toBe('upgrade');
+  });
+
+  it('stops upgrading when a hostile is present', () => {
+    const withHostile = room({ hostiles: [{ id: 'h1', x: 10, y: 10 }] });
+    const intent = decide(upgrader(), null, withHostile);
+    expect(intent?.kind).not.toBe('upgrade');
+  });
+
+  it('banks the energy it carries instead, so replacements stay affordable', () => {
+    // Banking is the whole point of withdrawing: the controller can be let down
+    // and recovered, but a colony that cannot buy creeps cannot recover.
+    const withHostile = room({
+      hostiles: [{ id: 'h1', x: 10, y: 10 }],
+      stores: [store('spawn1', 'spawn', 24, 10, 0, 300)],
+      spawns: [spawnAt(0)],
+    });
+    const intent = decide(upgrader({ x: 24, y: 11 }), null, withHostile);
+    expect(intent).toMatchObject({ kind: 'transfer', targetId: 'spawn1' });
+  });
+
+  it('idles rather than upgrading when it carries nothing to bank', () => {
+    // Nothing to bank and no fighting to do. Idling is the honest response; what
+    // it must NOT do is spend the withdrawal on the controller anyway.
+    const withHostile = room({ hostiles: [{ id: 'h1', x: 10, y: 10 }] });
+    expect(decide(upgrader({ energy: 0 }), null, withHostile)).toBeNull();
+  });
+
+  it('leaves the other roles alone while a hostile is present', () => {
+    // The withdrawal is scoped to the upgrader. Harvesting must continue: income
+    // is what pays for the creeps that will eventually replace the losses, and
+    // the threat may well outlast the run.
+    const withHostile = room({ hostiles: [{ id: 'h1', x: 10, y: 10 }] });
+    const intent = decide(creep({ role: 'harvester', x: 24, y: 5, energy: 0 }), null, withHostile);
+    expect(intent?.kind).toBe('harvest');
   });
 });

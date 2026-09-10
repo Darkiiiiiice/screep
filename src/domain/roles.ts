@@ -192,11 +192,26 @@ function hasIncome(room: RoomView): boolean {
  * @returns an intent to save, or null when this does not apply
  */
 function recoverIncome(creep: CreepView, room: RoomView): Intent | null {
-  if (creep.energy === 0) return null;
   if (hasIncome(room)) return null;
+  return bankEnergy(creep, room);
+}
+
+/**
+ * Take carried energy to the spawn, if it can hold more.
+ *
+ * Split out of `recoverIncome` because a second caller needs the same delivery
+ * for an unrelated reason: under threat the colony banks energy instead of
+ * spending it (see `decideUpgrader`). The delivery mechanics are identical, so
+ * they live in one place.
+ *
+ * @returns an intent to deliver, or null when there is nothing to carry or
+ *   nowhere to put it
+ */
+function bankEnergy(creep: CreepView, room: RoomView): Intent | null {
+  if (creep.energy === 0) return null;
 
   const spawn = room.spawns[0];
-  // No spawn means no recovery is possible; spending normally is all that is left.
+  // No spawn means there is nowhere to bank; spending normally is all that is left.
   if (!spawn) return null;
 
   // `spawnCreep` draws on the ROOM's energy pool, not the spawn's own store, so
@@ -361,8 +376,25 @@ function decideUpgrader(creep: CreepView, room: RoomView): Intent | null {
   const controller = room.controller;
   if (!controller?.my) return null;
 
-  // Before anything else: if the colony cannot buy a harvester, the energy this
-  // creep is carrying matters far more in the spawn than in the controller.
+  // Threat first: stop feeding the controller and bank the energy instead.
+  //
+  // This is where the threat response has to live, and it previously did not
+  // exist anywhere. It used to be expressed in `planTasks` as "do not create the
+  // upgrade task while hostiles are present" — which changed nothing at all,
+  // because this function never reads its task. Measured against the real engine:
+  // with a hostile in the room the planner pruned the upgrade task every tick and
+  // the controller kept advancing regardless, so the policy was inert while
+  // reading like a safety feature.
+  //
+  // It is a WITHDRAWAL, not a defence, and calling it a defence would be a lie:
+  // at RCL 2 there are no towers and a 2-ATTACK creep cannot kill an invader. The
+  // honest response is to stop spending on a controller that can be let down and
+  // recovered, and keep the energy where it can buy replacement creeps. Real
+  // defence needs towers, which is M5.
+  if (room.hostiles.length > 0) return bankEnergy(creep, room);
+
+  // Otherwise: if the colony cannot buy a harvester, the energy this creep is
+  // carrying matters far more in the spawn than in the controller.
   const recovery = recoverIncome(creep, room);
   if (recovery) return recovery;
 

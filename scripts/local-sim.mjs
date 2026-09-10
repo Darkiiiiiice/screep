@@ -114,22 +114,6 @@ async function buildWorld() {
     });
   }
 
-  // An inert creep parked in the spawn's approach corridor.
-  //
-  // This is not decoration: the live failure needed exactly this — an immobile
-  // creep one tile from the spawn that other creeps had to path around. Without
-  // it, a pathfinding bug that stalls creeps behind a blocker cannot reproduce
-  // here, and the harness cannot see the failure it exists to catch. Its role is
-  // left unassigned so the AI has no behaviour for it, matching the live case.
-  await server.world.addRoomObject('W0N1', 'creep', 24, 26, {
-    name: 'inert-blocker',
-    user: '2', // a foreign id: not ours, so it is never leased or commanded
-    hits: 100,
-    hitsMax: 100,
-    body: [{ type: 'move', hits: 100 }],
-    store: { energy: 0 },
-  });
-
   return server;
 }
 
@@ -140,7 +124,7 @@ async function buildWorld() {
  * the bot: the artifact under test stays byte-for-byte what is deployed, and the
  * observations come from the same source the game client would use.
  */
-async function readState(server) {
+async function readState(server, botUser) {
   const objects = await server.world.roomObjects('W0N1');
   const byType = (t) => objects.filter((o) => o.type === t);
 
@@ -149,6 +133,17 @@ async function readState(server) {
 
   return {
     time: await server.world.gameTime,
+    /**
+     * Creeps in the room NOT owned by the bot.
+     *
+     * Exposed because this scenario must contain none, and the first version
+     * quietly contained one: the inert blocker was written with `user: '2'`,
+     * which is the mockup's built-in Invader user, so the run silently became a
+     * permanent siege. That is a different scenario from the one intended, and it
+     * concealed a real bug — the threat policy was inert, and a hostile in the
+     * room was exactly what would have revealed it.
+     */
+    foreignCreeps: objects.filter((o) => o.type === 'creep' && o.user !== botUser).length,
     spawnEnergy: spawn ? (spawn.store?.energy ?? 0) : -1,
     spawnCapacity: spawn ? (spawn.storeCapacityResource?.energy ?? 300) : 300,
     spawning: spawn?.spawning ? spawn.spawning.name : null,
@@ -172,6 +167,7 @@ async function readState(server) {
       y: c.y,
       energy: c.store?.energy ?? 0,
       fatigue: c.fatigue ?? 0,
+      user: c.user,
     })),
   };
 }
@@ -192,6 +188,31 @@ const bot = await server.world.addBot({
   modules: { main: bundleSource },
 });
 
+// An inert creep parked in the spawn's approach corridor.
+//
+// This is not decoration: the live failure needed exactly this — an immobile
+// creep one tile from the spawn that other creeps had to path around. Without
+// it, a pathfinding bug that stalls creeps behind a blocker cannot reproduce
+// here, and the harness cannot see the failure it exists to catch.
+//
+// It is owned by the bot, and that matters. It was first written with `user: '2'`,
+// which is the mockup's built-in Invader user (see screeps-server-mockup
+// world.js) — so it registered as a hostile and the whole run silently became a
+// permanent siege. That conflated two unrelated scenarios, and it hid a real bug:
+// the threat policy in plan.ts was inert, and a hostile in the room was the only
+// thing that would have exercised it. An obstacle must not smuggle in a siege.
+//
+// Its role is left unassigned so the AI has no behaviour for it, matching the
+// live case: `decide` falls through to null and it never moves.
+await server.world.addRoomObject('W0N1', 'creep', 24, 26, {
+  name: 'inert-blocker',
+  user: bot.id,
+  hits: 100,
+  hitsMax: 100,
+  body: [{ type: 'move', hits: 100 }],
+  store: { energy: 0 },
+});
+
 const botLogs = [];
 bot.on('console', (logs) => {
   for (const line of logs) if (!/^\[\d+\] \(\+\d+ suppressed\)$/.test(line)) botLogs.push(line);
@@ -204,7 +225,7 @@ for (let i = 0; i < TICKS; i += 1) {
   await server.tick();
   // Sampling every tick is what makes the stall and movement checks possible;
   // it costs one engine read per tick and no game CPU.
-  samples.push(await readState(server));
+  samples.push(await readState(server, bot.id));
 }
 const elapsed = (Date.now() - startedAt) / 1000;
 
@@ -332,7 +353,20 @@ if (first && last) {
   }
   check('containers sit beside a source', objectives.length === 0, objectives.join('; '));
 
-  // 8. The AI's own error channel stayed quiet. Console lines are captured, so
+  // 8. The room is a pure economy scenario, with no hostiles in it.
+  //
+  // This is a guard on the FIXTURE, not on the AI. The intended scenario is
+  // "pathfinding around an inert obstacle", and a foreign creep in the room turns
+  // it into "operate under siege" — a different scenario that also suppresses
+  // upgrading. Asserting its absence keeps the two from silently becoming one.
+  const sieged = samples.filter((s) => s.foreignCreeps > 0).length;
+  check(
+    'the room has no foreign creeps (obstacle, not a siege)',
+    sieged === 0,
+    `${String(sieged)}/${String(samples.length)} ticks had a foreign creep in the room`,
+  );
+
+  // 9. The AI's own error channel stayed quiet. Console lines are captured, so
   //    an error flood is visible as repeated `[error]` lines.
   const errorLines = botLogs.filter((l) => l.includes('[error]'));
   check('no error flood from the AI', errorLines.length <= 3, `${String(errorLines.length)} error lines`);

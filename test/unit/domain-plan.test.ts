@@ -131,17 +131,21 @@ describe('pruning work that stopped being useful', () => {
     expect(result.pruned).toBe(1);
   });
 
-  it('removes the upgrade task when a hostile appears', () => {
-    // Upgrading is deliberately suspended under threat, and pruning is what makes
-    // that suspension real rather than merely "not re-added".
+  it('keeps planning the upgrade while hostiles are present', () => {
+    // Deliberately UNGATED. The task used to be dropped under threat, which read
+    // as a safety feature but changed nothing: `decideUpgrader` never reads its
+    // task, so the creep upgraded anyway (measured — the controller kept
+    // advancing with a hostile in the room). The threat response now lives in
+    // `decideUpgrader`; asserting it here would be asserting the decorative
+    // layer. See domain-roles.test.ts for the behavioural test.
     const board = emptyBoard();
     planTasks(board, room(), 'ESTABLISHED', 1);
 
     const hostile = room({ hostiles: [{ id: 'h1', x: 10, y: 10 }] });
     const result = planTasks(board, hostile, 'ESTABLISHED', 2);
 
-    expect(result.pruned).toBe(1);
-    expect(Object.values(board.tasks).some((t) => t.kind === 'upgrade')).toBe(false);
+    expect(result.pruned).toBe(0);
+    expect(Object.values(board.tasks).some((t) => t.kind === 'upgrade')).toBe(true);
   });
 
   it('reports how much it pruned, for the stats line', () => {
