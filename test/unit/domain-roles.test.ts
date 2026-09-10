@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decide, rangeBetween } from '@/domain/roles';
-import type { CreepView, RoomView, SourceView, StoreView } from '@/domain/types';
+import type { CreepView, RoomView, SourceView, SpawnView, StoreView } from '@/domain/types';
 
 function creep(overrides: Partial<CreepView> = {}): CreepView {
   return {
@@ -256,6 +256,130 @@ describe('act locally, travel only when necessary', () => {
     const intent = decide(creep({ energy: 4, x: 24, y: 6 }), null, view);
 
     expect(intent?.kind).toBe('harvest');
+  });
+});
+
+describe('income recovery', () => {
+  // The hole this closes was real, not theoretical. Measured: the sole harvester
+  // reached the end of its 1500-tick life and the surviving consumers mined as
+  // intended — but an upgrader spends what it mines on the controller and a
+  // builder spends it on a site. Neither deposits, so nothing could accumulate
+  // the ~250 a replacement harvester costs. The colony recovered only because a
+  // dropped pile happened to decay into the spawn, one unit per tick.
+  /** The spawn appears in BOTH views: `stores` for deposits, `spawns` for the
+   * recovery check. Setting only one is a trap the first version fell into. */
+  const spawnAt = (energy: number, capacity = 300): SpawnView => ({
+    id: 'spawn1',
+    name: 'Spawn1',
+    x: 24,
+    y: 10,
+    room: 'W1N1',
+    energy,
+    energyAvailable: energy,
+    energyCapacityAvailable: capacity,
+    spawning: false,
+    spawningName: null,
+    spawningRole: null,
+    spawnTicksRemaining: 0,
+  });
+
+  const noIncome = (overrides: Partial<RoomView> = {}): RoomView =>
+    room({
+      stores: [store('spawn1', 'spawn', 24, 10, 100, 300)],
+      spawns: [spawnAt(100)],
+      sources: [source('src1', 24, 5)],
+      ...overrides,
+    });
+
+  it('banks energy into the spawn when no harvester exists', () => {
+    // Carrying energy and standing next to the spawn: banking is the only action
+    // that can restore income.
+    const intent = decide(creep({ role: 'upgrader', energy: 40, x: 24, y: 11 }), null, noIncome());
+
+    expect(intent?.kind).toBe('transfer');
+    expect((intent as { targetId: string }).targetId).toBe('spawn1');
+  });
+
+  it('does the same for a builder, instead of spending on a site', () => {
+    // The builder is the role most tempted to spend: it always has a site. With
+    // no income, a half-built extension is worth less than a working harvester.
+    const view = noIncome({
+      constructionSites: [
+        {
+          id: 'site1',
+          x: 30,
+          y: 30,
+          room: 'W1N1',
+          structureType: 'extension',
+          progress: 0,
+          progressTotal: 3000,
+        },
+      ],
+    });
+
+    const intent = decide(creep({ role: 'builder', energy: 40, x: 24, y: 11 }), null, view);
+    expect(intent?.kind).toBe('transfer');
+  });
+
+  it('stops spending on the controller while the colony cannot buy a harvester', () => {
+    const view = noIncome();
+    // Adjacent to the controller, which would normally mean "upgrade".
+    const intent = decide(
+      creep({ role: 'upgrader', energy: 40, x: 24, y: 11 }),
+      null,
+      { ...view, controller: view.controller ? { ...view.controller, x: 24, y: 12 } : null },
+    );
+
+    expect(intent?.kind).toBe('transfer');
+  });
+
+  it('still mines when empty and there is no income', () => {
+    // Recovery requires a source of energy; banking only matters once something
+    // has been mined.
+    const intent = decide(creep({ role: 'upgrader', energy: 0, x: 24, y: 6 }), null, noIncome());
+    expect(intent?.kind).toBe('harvest');
+  });
+
+  it('leaves normal behaviour alone while a harvester is alive', () => {
+    // The rule is a rescue, not the default: with income the colony keeps
+    // upgrading and building rather than hoarding.
+    const view = roomWithIncome({
+      stores: [store('spawn1', 'spawn', 24, 10, 100, 300)],
+    });
+    const intent = decide(creep({ role: 'upgrader', energy: 40, x: 24, y: 11 }), null, view);
+
+    expect(intent?.kind).not.toBe('transfer');
+  });
+
+  it('counts a harvester still being built as income', () => {
+    // A replacement already committed to means recovery is under way, so the
+    // colony can go back to spending.
+    const view = noIncome({
+      spawns: [
+        {
+          ...spawnAt(100),
+          spawning: true,
+          spawningName: 'harvester-W1N1-1',
+          spawningRole: 'harvester',
+          spawnTicksRemaining: 10,
+        },
+      ],
+    });
+
+    const intent = decide(creep({ role: 'upgrader', energy: 40, x: 24, y: 11 }), null, view);
+    expect(intent?.kind).not.toBe('transfer');
+  });
+
+  it('gives up on banking when the room is already full', () => {
+    // Nothing to gain: `spawnCreep` draws on a full pool, and if it cannot afford
+    // a harvester while full then the problem is not energy.
+    const view = noIncome({
+      stores: [store('spawn1', 'spawn', 24, 10, 300, 300)],
+      spawns: [spawnAt(300)],
+    });
+    const intent = decide(creep({ role: 'upgrader', energy: 40, x: 24, y: 11 }), null, view);
+
+    expect(intent?.kind).not.toBe('transfer');
   });
 });
 

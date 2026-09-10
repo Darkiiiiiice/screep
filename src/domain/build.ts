@@ -22,17 +22,26 @@ import type { RoomView } from './types';
  * M4/M5 concerns.
  */
 const STRUCTURE_CEILING: Record<number, Record<string, number>> = {
-  2: { extension: 5 },
-  3: { extension: 10, tower: 1 },
-  4: { extension: 20, tower: 1, storage: 1 },
-  5: { extension: 30, tower: 2, storage: 1 },
-  6: { extension: 40, tower: 2, storage: 1, terminal: 1 },
-  7: { extension: 50, tower: 3, storage: 1, terminal: 1 },
-  8: { extension: 60, tower: 6, storage: 1, terminal: 1 },
+  2: { extension: 5, container: 2 },
+  3: { extension: 10, container: 5, tower: 1 },
+  4: { extension: 20, container: 5, tower: 1, storage: 1 },
+  5: { extension: 30, container: 5, tower: 2, storage: 1 },
+  6: { extension: 40, container: 5, tower: 2, storage: 1, terminal: 1 },
+  7: { extension: 50, container: 5, tower: 3, storage: 1, terminal: 1 },
+  8: { extension: 60, container: 5, tower: 6, storage: 1, terminal: 1 },
 };
 
 /** RCL 8 is the top of the table, so that is as far as "build up to" goes. */
 const MAX_LEVEL = 8;
+
+/**
+ * Note on containers: the official table permits five of them from RCL 0, but
+ * they are deferred to RCL 2 here. At RCL 1 a container's 250 energy competes
+ * with the 200 that unlocks the first extensions, and the extensions come first.
+ * From RCL 2 the container is the single best purchase available: it sits beside
+ * a source so the harvester's round trip shrinks from a walk across the room to
+ * a step, which is what the ESTABLISHED economy is built on.
+ */
 
 /**
  * New sites allowed per tick.

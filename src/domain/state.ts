@@ -22,7 +22,11 @@ import type { ColonyState, RoomView } from './types';
 /** Minimum controller level for each state. */
 const MIN_LEVEL: Record<ColonyState, number> = {
   BOOTSTRAP: 0,
-  ESTABLISHED: 3,
+  // 2, not 3: the container is what defines this state, and a container can be
+  // placed from RCL 2 (see domain/build.ts). An earlier value of 3 read the
+  // level off the extension table rather than off the structure that actually
+  // changes the economy, and it delayed the hauler-based model by a full level.
+  ESTABLISHED: 2,
   MATURE: 6,
   EXPANSION: 8,
 };

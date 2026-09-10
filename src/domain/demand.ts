@@ -84,20 +84,31 @@ export function roleDemand(room: RoomView, state: ColonyState): RoleDemand[] {
 
   const demands: RoleDemand[] = [];
 
-  // One harvester per source at ESTABLISHED and above: there, containers buffer
-  // and a dedicated creep can sit on a source, so saturating each source is
-  // what raises income.
+  // One harvester per source, with one exception that was learned the hard way.
   //
-  // At BOOTSTRAP that rule actively hurts, because it makes the colony build a
-  // second harvester before it ever builds an upgrader. A 300-capacity room
-  // supports one self-hauling creep, and RCL 1 -> 2 costs only 200 energy while
-  // unlocking 5 extensions (+250 capacity) — the best return available anywhere
-  // in the early game. Delaying it to double the harvester count is a bad trade.
-  const harvesters = state === 'BOOTSTRAP' ? 1 : Math.max(base.harvester ?? 1, sourceCount);
+  // At RCL 1 a second harvester must NOT be built: that 250 energy competes
+  // directly with the 200 needed for RCL 1 -> 2, and hitting level 2 unlocks five
+  // extensions (+250 capacity). Measured on the live room, requesting one
+  // harvester per source made the colony build the second harvester before it
+  // ever built an upgrader, and progress stalled with a full spawn.
+  //
+  // Once extensions exist the trade reverses, and the arithmetic is decisive.
+  // Measured income with a single harvester was ~1.25–2 energy/tick, which puts
+  // RCL 2 -> 3 (45,000 energy) roughly 40 hours away; a second harvester costs
+  // 250, pays for itself in about 200 ticks, and returns ~1,600 energy over its
+  // 1500-tick life. The room has two sources regenerating 10 energy/tick each
+  // and the colony mines 4, so the second source is free income that was simply
+  // going unclaimed.
+  const level = room.controller?.level ?? 0;
+  const harvesters =
+    level >= 2 ? Math.max(base.harvester ?? 1, sourceCount) : 1;
   demands.push({
     role: 'harvester',
     count: harvesters,
-    reason: state === 'BOOTSTRAP' ? 'single self-hauling creep' : `${String(sourceCount)} source(s)`,
+    reason:
+      level >= 2
+        ? `${String(sourceCount)} source(s)`
+        : 'single harvester until extensions exist',
   });
 
   if (base.hauler) {

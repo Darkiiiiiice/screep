@@ -18,7 +18,9 @@
     "stats": "node scripts/stats.mjs",
     "whoami": "node scripts/whoami.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "snapshot": "node scripts/snapshot.mjs"
+    "snapshot": "node scripts/snapshot.mjs",
+    "sim": "bash scripts/sim.sh",
+    "engine": "bash scripts/engine-setup.sh"
   },
   "dependencies": {
     "screeps-api": "^2.1.0"

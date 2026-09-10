@@ -4,3 +4,5 @@ dist/
 *.log
 .screeps-quota.jsonl
 logs/
+.engine/
+server/

@@ -158,6 +158,55 @@ interface Supply {
 }
 
 /**
+ * True when the room has an income source: a living harvester, or one being built.
+ *
+ * Only a harvester deposits into the spawn; every other role spends what it
+ * carries. So when the last harvester is gone, nothing in the colony can refill
+ * the spawn, and the spawn is the only way to buy income back. That makes this
+ * the one condition under which consumers must stop spending and start saving.
+ */
+function hasIncome(room: RoomView): boolean {
+  for (const creep of room.creeps) {
+    if (creep.role === 'harvester') return true;
+  }
+  for (const spawn of room.spawns) {
+    if (spawn.spawningRole === 'harvester') return true;
+  }
+  return false;
+}
+
+/**
+ * Save carried energy into the spawn, when the colony has lost its income.
+ *
+ * This closes the recovery loop, and its absence was a real hole rather than a
+ * theoretical one. Measured: the sole harvester reached the end of its life, and
+ * the surviving consumers mined as intended — but an upgrader spends what it
+ * mines on the controller and a builder spends it on a site. Neither ever
+ * deposits, so nothing could accumulate the ~250 a replacement harvester costs.
+ * The colony only recovered because a dropped energy pile happened to sit beside
+ * the spawn and decayed into it, one unit per tick — luck, not design.
+ *
+ * With this rule the loop always closes: no income means consumers mine and then
+ * BANK the result, until the spawn can afford the harvester that restores income.
+ *
+ * @returns an intent to save, or null when this does not apply
+ */
+function recoverIncome(creep: CreepView, room: RoomView): Intent | null {
+  if (creep.energy === 0) return null;
+  if (hasIncome(room)) return null;
+
+  const spawn = room.spawns[0];
+  // No spawn means no recovery is possible; spending normally is all that is left.
+  if (!spawn) return null;
+
+  // `spawnCreep` draws on the ROOM's energy pool, not the spawn's own store, so
+  // affordability and headroom are both room-level questions.
+  if (spawn.energyAvailable >= spawn.energyCapacityAvailable) return null;
+
+  return actOrApproach(creep, spawn, 'transfer');
+}
+
+/**
  * Energy the spawn must keep in hand before consumers may draw from it.
  *
  * The cost of the cheapest viable harvester body — `{work, carry, move, move}` at
@@ -274,6 +323,9 @@ function decideHarvester(creep: CreepView, task: Task | null, room: RoomView): I
  * harvesters for the same pool of energy.
  */
 function decideHauler(creep: CreepView, room: RoomView): Intent | null {
+  const recovery = recoverIncome(creep, room);
+  if (recovery) return recovery;
+
   const sink = nearest(creep, sinksFor(room));
   const supply = energySupply(creep, room);
 
@@ -298,6 +350,11 @@ function decideUpgrader(creep: CreepView, room: RoomView): Intent | null {
   const controller = room.controller;
   if (!controller?.my) return null;
 
+  // Before anything else: if the colony cannot buy a harvester, the energy this
+  // creep is carrying matters far more in the spawn than in the controller.
+  const recovery = recoverIncome(creep, room);
+  if (recovery) return recovery;
+
   const supply = energySupply(creep, room);
 
   // 1. Spend, while carrying and in reach. Spending the last unit is free: the
@@ -321,6 +378,9 @@ function decideBuilder(creep: CreepView, task: Task | null, room: RoomView): Int
     task?.kind === 'build' ? room.constructionSites.find((s) => s.id === task.targetId) : undefined;
   const site = assigned ?? nearest(creep, room.constructionSites);
   const supply = energySupply(creep, room);
+
+  const recovery = recoverIncome(creep, room);
+  if (recovery) return recovery;
 
   if (creep.energy > 0 && site && inReach(creep, site, 'build')) {
     return act(creep, site, 'build');
