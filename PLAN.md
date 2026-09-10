@@ -23,7 +23,34 @@
 
 **推论**：源码按 ESM 写、构建期打包成单文件（`module.exports.loop`）上传；待官方 ESM 落地，去掉打包步骤改整目录上传即可，源码零改动。构建 target 定 `node24`。
 
-### 1.2 线上速率限制（**本计划最重要的约束**）
+### 1.1.1 本账号实测结论（P0 已验证，非推测）
+
+| 项 | 实测值 | 判定依据 |
+|---|---|---|
+| 账号 | `darkiiiiiice`，user id `67a322b77214860012912bcb` | `authMe()` |
+| **所在 shard** | **`shard3`** | `gameShardsInfo()` 中仅 shard3 报 `cpuLimit: 20`；且 `userWorldStartRoom('shard3')` 返回候选出生房 `W55S5, W15N45, W35S5` |
+| **CPU 是否解锁** | **未解锁**（`cpuLimit: 20`） | 同上限流表：未解锁固定 20。**这直接决定 §8 的结论** |
+| 世界状态 | `empty` —— **尚未放置出生点（spawn）** | `userWorldStatus()` → `{"ok":1,"status":"empty"}`，`userOverview().shards[shard3].rooms = []` |
+
+**两个必须前置的现实约束**：
+
+1. **世界是 `empty`** —— 没有 spawn 就没有 creep，AI 部署上去也无事可做。**M2/M3 的验收被此阻塞**：需要你先在 shard3 的三个候选房间（`W55S5` / `W15N45` / `W35S5`）中选定一个并放置首个 spawn。在此之前 M0/M1 可以推进（空内核不依赖房间），但 M2 起必须等开局。
+2. **CPU 20 已确认** —— 见 §8。
+
+### 1.1.2 shard 自动识别（已实现并验证）
+
+**永远不要假设 `shard0`。** 本账号被分配到 shard3，且赛季/新手分片会漂移。两路**独立**服务端信号互相印证：
+
+| 信号 | 判据 | 成本 |
+|---|---|---|
+| `gameShardsInfo()` ← **主判据** | 账号所在 shard 报真实上限（`cpuLimit: 20`），不在的 shard 报 `cpuLimit: 0` | 1 次请求 |
+| `userWorldStartRoom(shard)` ← 交叉验证 | 只有被分配的 shard 返回候选出生房（非空数组），其余返回 `[]` | 每 shard 1 次 |
+
+**不可用的信号**：`userOverview()`。它对从未开局的账号也列出**全部** shard 且 `rooms: []`，无法区分"已分配"与"未分配"—— 这是实测推翻的一个直觉假设。
+
+实现见 `scripts/lib/shard.mjs`；`SCREEPS_SHARD` 显式设置时优先，但与检测结果不符会**告警而非静默遵从**（.env 里的过期值正是要防的故障）。
+
+### 1.2 部署配额与速率限制（**本计划最重要的约束**）
 
 `docs/auth-tokens.md`：浏览器/Steam 客户端的常规请求**不限流**，但**用 token 认证的所有请求都限流**，超限返回 `429`。响应头带 `X-RateLimit-Limit/Remaining/Reset`。
 
@@ -257,7 +284,7 @@ flowchart LR
 
 | 里程碑 | 对应状态 | 内容 | 可观测验收标准 |
 |---|---|---|---|
-| **M0 基础设施** | — | 仓库骨架、构建/类型检查/单测/部署/观测五条命令、token 连通性与配额记账 | `npm run typecheck && npm test && npm run build` 全绿；`authMe()` 返回正确用户名与目标 shard；配额记账器能报出当日已用次数；`watch.mjs` 能收到线上 console |
+| **M0 基础设施** ✅ | — | 仓库骨架、构建/类型检查/单测/部署/观测命令、token 连通性与 shard 自动识别 | **已达成**：`typecheck`/`lint`/`test`(8 passed)/`build` 全绿；`whoami` 自动识别 shard3 与 CPU 20；守卫规则经反例测试确认会拦截违规。`deploy`/`watch`/`stats` 命令待补 |
 | **M1 内核骨架** | — | tick 管线、CPU 预算与降级、cache/heap/memory/stats/log/errors/profiler、**可观测性就位** | 空内核上线连续 200 tick 稳定；profiler 输出各阶段耗时；注入一处故意抛错，tick 不中断且错误只上报一次；Memory 大小恒定；**segment 统计曲线可在本地拉取** |
 | **M2 任务系统 + 角色** | — | 任务注册表与租约、角色行为表、**状态机骨架（先只实现 `BOOTSTRAP`）**、spawn manager | 轨道 A 覆盖任务全生命周期；轨道 B 回放线上快照能产出正确命令序列；线上 creep 完成 harvest → deliver 全链，死亡后自动补员 |
 | **M3 `BOOTSTRAP`→`ESTABLISHED`** | RCL 1–5 | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应、状态迁移判定 | **连续 2000 tick 无 creep 断档**（按线上实际 tick 时长折算约数小时，需实测标定）；RCL **1→5**（累计 585,200 能量）；CPU 峰值 < 20；Memory 波动 < 5% |
@@ -322,24 +349,56 @@ flowchart LR
 
 ---
 
-## 8. 需要你拍板的一件事
+## 8. CPU Unlock —— 已由实测确定
 
-### CPU Unlock —— 决定 M4 是否可行
+**实测结论：本账号未解锁，`cpuLimit = 20`**（`gameShardsInfo()` 中 shard3 报 20，其余 shard 报 0）。
 
-官方规则：**未解锁时 CPU 固定 20**，GCL 提升**不会**加 CPU；解锁后每 GCL +10，上限 300。bucket 上限 10,000、单 tick 最多透支 500，所以 20 CPU 靠攒 bucket 能做**偶发**重算（PathFinder），但扛不住**持续**多房间负载。
+规则：未解锁时 CPU **固定 20**，GCL 提升**不会**加 CPU；解锁后每 GCL +10，上限 300。bucket 上限 10,000、单 tick 最多透支 500，所以 20 CPU 靠攒 bucket 能做**偶发**重算（PathFinder、远矿扫描），但扛不住**持续**多房间负载。
 
-- **不解锁**：M4/M5 重定义为"在 20 CPU 内把单房间做到极致 + 极轻量远程开采"。这是个有嚼头的约束 —— 20 CPU 下的极限优化比堆房间更考验工程。
-- **解锁**：M4 多房间按原计划推进，M5 加入"CPU 预算随 GCL 重算"。
+由此：
 
-**不影响 M0–M3** —— 20 CPU 正好是 M3 的硬指标，先按不解锁做，届时再定。
+| 若 | 则 M4/M5 定义为 |
+|---|---|
+| **保持不解锁**（当前状态） | 在 20 CPU 内把**单房间**做到极致 + 极轻量远程开采。多房间扩张不现实 —— 但这是个有嚼头的约束，20 CPU 下的极限优化比堆房间更考验工程 |
+| 购买 CPU Unlock | M4 多房间按原计划推进，M5 需加入"CPU 预算随 GCL 重算"逻辑（预算不再是个常数） |
+
+**不影响 M0–M3** —— 20 CPU 正是 M3 的硬指标（CPU 峰值 < 20），先按不解锁做。
+
+> 注：bucket 是可用的正收益来源。M1 的降级逻辑已按"预算 = `min(tickLimit, limit)`"实现（`src/kernel/tick.ts`），刻意**不**去借 bucket —— 借满 500 CPU 会让本 shard 其他玩家卡顿。若日后确认需要突发重算，再单独评估借用策略。
 
 ---
 
-## 9. 立即执行（P0）
+## 9. P0 执行状态与 M0 落地记录
 
-1. ~~`git init`~~ 已完成（`7a5610c`）。
-2. **搭仓库骨架**：`package.json`（`"type": "module"`）+ tsconfig + esbuild/vitest/eslint + 五条命令脚本。
-3. **验证线上连通与配额**：用 `screeps-api@2` 的 `ScreepsHttpClient`（注意 v2 接口名）调 `authMe()`，确认 token 有效、记录目标 shard，并从响应头读出全局配额的 `Limit/Remaining/Reset` —— 这一步同时验证了凭据与限流观测能力。
-4. **验证观测信道**：`ScreepsSocketClient` 订阅 `console`，确认能收到线上脚本输出。
+### 9.1 已完成
 
-第 3、4 项是"只玩线上"模式的地基（凭据 + 观测），任一失败都要先解决再进 M1。
+| 项 | 状态 | 证据 |
+|---|---|---|
+| `git init` | ✅ | 提交 `7a5610c`、`a6bf7cf`、`dc5fdd7` |
+| 仓库骨架 | ✅ | `package.json`(ESM) / `tsconfig.json` / `eslint.config.mjs` / `vitest.config.ts` / `scripts/` |
+| 依赖安装 | ✅ | 167 包；TS 6.0.3、vitest 5.0.0、esbuild 0.28.2、screeps-api 2.1.0 |
+| 四道门禁 | ✅ | `typecheck` / `lint` / `test`(8 passed) / `build` 全绿 |
+| token 连通性 | ✅ | `authMe()` → `darkiiiiiice` |
+| **shard 自动识别** | ✅ | 无配置即定位 `shard3`（见 §1.1.2） |
+| 架构守卫 | ✅ | 反例测试确认 `@/kernel` import、`Game`、`Memory` 三类违规均被拦截 |
+| `deploy` / `watch` / `stats` 脚本 | ⬜ 待补 | M0 剩余项 |
+| 配额记账 | ✅ | `scripts/lib/quota-ledger.mjs` + `quotas.mjs`（待接入脚本） |
+
+### 9.2 工具链实测坑（**后续会话务必先读**）
+
+| 坑 | 现象 | 解法 | 已固化于 |
+|---|---|---|---|
+| **npm 12 默认禁 git 依赖** | `EALLOWGIT`：`isolated-vm@github:...` 被拒 | `--allow-git=all`（仅私服方案需要，现方案不涉及） | — |
+| **npm 12 拦截 install script** | esbuild postinstall 未执行，`@esbuild/linux-x64` 二进制缺失 | `npm install-scripts approve esbuild` | 需在 README 记录 |
+| **TS 7 无 lint 生态** | `typescript-eslint@8.70.0` peer 为 TS `>=4.8.4 <6.1.0`，且**无 v9**；TS latest 是 7.0.2 | **pin `typescript@~6.0.3`**。理由：工具链首要属性是"无聊且被支持"，且 @types/screeps 与 TS 7 兼容性未验证，而 esbuild 已负责转译、tsc 只做类型检查 | `package.json` |
+| **TS 6 弃用 `baseUrl`** | `error TS5101`：baseUrl 将在 TS 7 停止工作 | 直接删除 `baseUrl`，`paths` 用相对路径 `./src/*` | `tsconfig.json` |
+| **`"type": "module"` 让 CJS 产物失效** | 同样的字节，`.js` 里 `require()` 得到 `loop === undefined`，`.cjs` 里是函数 | 构建时写出 `dist/package.json` = `{"type":"commonjs"}`，保留约定文件名 `main.js` | `scripts/build.mjs` |
+| **`screeps-api@2.1.0` engines** | `EBADENGINE`：要求 node `22.x \|\| 24.x`，本机 26.8.2 | 实测可用（仅告警）。留意后续版本是否收紧或用 Node 24 运行脚本 | — |
+| **客户端构造方式** | `fromConfig()` 需要磁盘上的 screeps 配置文件，我们没有 | `new ScreepsHttpClient({ server: { url, token }, app: {} })`——**必须给 `server.url` 全 URL**，否则 axios 拿到相对路径报 `ERR_INVALID_URL` | `scripts/lib/client.mjs` |
+| **v2 接口改名** | `ScreepsAPI`→`ScreepsHttpClient`，方法扁平化（`userOverview`/`userWorldStartRoom`/`gameShardsInfo`/`authMe`） | 已按 v2 写 | `scripts/lib/*.mjs` |
+
+### 9.3 下一步（M0 收尾 → 开局 → M1）
+
+1. 补 `scripts/deploy.mjs`（含配额记账与 60/天硬上限）、`watch.mjs`（WebSocket console）、`stats.mjs`（memory segment）。
+2. **【需要你操作】在 shard3 的 `W55S5` / `W15N45` / `W35S5` 中选定一个放置首个 spawn** —— 世界状态 `empty`，没有 spawn 则 M2 起的验收无从谈起。
+3. M1 内核骨架（tick 管线已立骨架，补 cache/heap/memory/errors/profiler/stats）。

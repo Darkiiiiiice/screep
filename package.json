@@ -1,0 +1,38 @@
+{
+  "name": "screep",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Screeps: World MMO AI (online-only)",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test scripts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "node scripts/deploy.mjs",
+    "watch": "node scripts/watch.mjs",
+    "stats": "node scripts/stats.mjs",
+    "whoami": "node scripts/whoami.mjs"
+  },
+  "dependencies": {
+    "screeps-api": "^2.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.1",
+    "@types/screeps": "^3.4.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.10.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.6",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^5.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
