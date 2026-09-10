@@ -307,7 +307,7 @@ flowchart LR
 | **M0 基础设施** ✅ | — | 仓库骨架、构建/类型检查/单测/部署/观测命令、token 连通性与 shard 自动识别 | **已达成**：`typecheck`/`lint`/`test`(8 passed)/`build` 全绿；`whoami` 自动识别 shard3 与 CPU 20；守卫规则经反例测试确认会拦截违规。`deploy`/`watch`/`stats` 均已实测（部署 1/240、console 流、段读取）|
 | **M1 内核骨架** ✅ | — | tick 管线、CPU 预算与降级、cache/heap/memory/stats/log/errors/profiler | **已达成**：54 单测通过；`npm run smoke` 跑真实产物 200 tick × 2 相（常规 + CPU 高压），9 项断言全过——含**降级确实触发**与**关键阶段从不被跳过**；Memory 迁移幂等；stats 段写入且有界 |
 | **M2 任务系统 + 角色** ✅ | — | 任务注册表与租约、角色行为表、状态机、spawn manager | **已达成**：任务租约全生命周期单测覆盖；真实房间 W34S1 回放断言意图序列；**线上实测闭环**：harvester 采满 → 交付 spawn → upgrader 出生 → 控制器进度开始增长（`prog 2→3`）。⚠️ **creep 死亡后的自动补员尚未实测**（需等 1500 tick 寿命到期） |
-| **M3 `BOOTSTRAP`→`ESTABLISHED`** | RCL 1–5 | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应、状态迁移判定 | **连续 2000 tick 无 creep 断档**（按线上实际 tick 时长折算约数小时，需实测标定）；RCL **1→5**（累计 585,200 能量）；CPU 峰值 < 20；Memory 波动 < 5% |
+| **M3 `BOOTSTRAP`→`ESTABLISHED`** 🔄 | RCL 1–5 | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应、状态迁移判定 | **进行中**：RCL **1→2 已完成**（实测）；extension 建造规划已上线并在建（实测 build +4/tick）；RCL 升级与建造同时推进（实测 RCL prog +1/tick）。待办：RCL 3 的容器建造、2000 tick 无断档验收。⚠️ 未验证：creep 死亡后补员 |
 | **M4 `MATURE`** | RCL 6–7 | link 链路、专用 miner、物流分层、**届时再设计** | RCL 6+；link 生效后 CPU 不升反降 |
 | **M5+ 扩张与对抗** | RCL 8 | claim、远程开采、防御、Power Creeps —— **细节刻意不在此规划** | — |
 
@@ -323,6 +323,20 @@ flowchart LR
 **修正的一个真实效率 bug**（实测发现）：角色原本「一有能量就出发」，harvester 采 4 能量走 5 格去交付 —— 控制器进度因此长期为 0。改为**装满再移动**后吞吐提升约 10 倍（容量 50 vs 单 tick 采 4）。同理应用于 upgrader 与 builder。
 
 **修正的一个配比错误**：BOOTSTRAP 原本按「每 source 一个 harvester」补员，导致在造出 upgrader 之前先造第二个 harvester。而 RCL 1→2 只要 200 能量却解锁 5 个 extension（+250 容量，+83%），是前期回报最高的单步。
+
+**RCL 2 后的实测数字（t=82878392–426）**：
+
+| 指标 | 实测 |
+|---|---|
+| RCL 进度 | 约 **1/tick**（2 个 upgrader） |
+| 建造进度 | 约 **4/tick**（builder 1 WORK × 5 建造力） |
+| **extension 单价** | **3000 能量/个**（我此前误把容量 50 当造价 → 5 个共 15,000） |
+| RCL 2→3 | 45,000 能量 |
+| 合计需 | 约 60,000 能量 ≈ **45 小时**（4s/tick） |
+
+**一个真实张力（非 bug）**：建造按 1:1 消耗能量，故 builder 以 4/tick 吃掉全部收入（收入仅 1–2/tick），期间控制器进度停滞。这是资源竞争的正确表现，extension 完工后缓解。
+
+**移动速率的关键实测**：`fatigue=4` 每两 tick ⇒ **3 tick/格** —— 那批 creep 是比率修复**之前**出生的（`work+work+carry+move`，3 个非 MOVE 对 1 个 MOVE）。修复后的比率（`move == 非 MOVE`）为 1 tick/格。这解释了「看起来像振荡、实为慢速移动」的现象。
 
 > **M4 起刻意不做详细规划。** 远程开采、Power Creeps、市场这些内容，只有在 M3 指标达成、RCL 真的推到那一档时，约束条件（CPU 余量、房间地形、邻居威胁）才具体到可做设计。现在写细节等于对着想象写代码 —— 到 M4 开头单独出一版设计。
 >
