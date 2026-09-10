@@ -91,14 +91,21 @@ export function execute(intent: Intent): number {
   // Handing it raw coordinates of a source or spawn produced ERR_NO_PATH — the
   // creep was being sent into a tile it could never stand on.
   if (intent.kind === 'approach') {
-    // ignoreCreeps: the pathfinder treats other creeps as obstacles by default,
-    // which in a wall-heavy room means two creeps in the same corridor give each
-    // other ERR_NO_PATH even though the target is plainly reachable. Collisions
-    // resolve on their own when the blocked creep waits a tick.
+    // Creeps are NOT ignored, and that choice was learned the hard way.
+    //
+    // `ignoreCreeps: true` looks like the fix for creeps blocking each other in a
+    // corridor, but it is incompatible with a blocker that never moves: the
+    // pathfinder keeps choosing the shortest route through that tile, and with a
+    // cached path the creep never reconsiders. Measured live — an immobile creep
+    // one tile from the spawn froze three others for over 60 ticks, all reporting
+    // zero fatigue and zero movement.
+    //
+    // Treating creeps as obstacles means a blocked creep gets ERR_NO_PATH, which
+    // is classified as `no-route` (bounded, and retried next tick) and heals as
+    // soon as the blocker shifts. A tick of delay beats a permanent stall.
     return creep.moveTo(target as unknown as RoomObject, {
       range: intent.range,
-      reusePath: 20,
-      ignoreCreeps: true,
+      reusePath: 15,
     });
   }
 

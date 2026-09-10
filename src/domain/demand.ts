@@ -59,11 +59,15 @@ const BASE_QUOTA: Record<ColonyState, Partial<Record<Role, number>>> = {
 function upgraderCount(state: ColonyState, room: RoomView, base: number): number {
   if (state !== 'BOOTSTRAP') return base;
 
-  // Only the spawn stores energy at this tier.
-  const spawns = room.spawns;
-  if (spawns.length === 0) return base;
+  const spawn = room.spawns[0];
+  if (!spawn) return base;
 
-  const saturated = spawns.every((s) => s.energy >= s.energyCapacityAvailable);
+  // Compare the ROOM's stored energy against the ROOM's capacity. An earlier
+  // version compared the spawn's own store against the room capacity, which
+  // works at RCL 1 only because both happen to be 300 — once five extensions
+  // exist the spawn can never hold 550, so saturation was never detected and
+  // the second upgrader was never requested.
+  const saturated = spawn.energyAvailable >= spawn.energyCapacityAvailable;
   return saturated ? Math.max(base, 2) : base;
 }
 

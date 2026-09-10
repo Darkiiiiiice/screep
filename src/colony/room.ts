@@ -18,6 +18,8 @@
  *   assign before decide: a creep's intent depends on the task it holds.
  */
 import type { Intent, Role, RoomView } from '../domain/types';
+import { structureWants } from '../domain/build';
+import { placeWanted } from '../game/build';
 import { deriveState } from '../domain/state';
 import { roleDemand, shortfall } from '../domain/demand';
 import {
@@ -50,6 +52,8 @@ function board(): TaskBoard {
 export interface RoomTickResult {
   room: string;
   state: string;
+  /** Construction sites placed this tick. */
+  placed: number;
   tally: ExecutionTally;
   /** Roles below their demand, for the stats segment. */
   shortfall: { role: string; missing: number }[];
@@ -65,8 +69,13 @@ export interface RoomTickResult {
   spawnReason: string;
 }
 
-/** Run one room for one tick. */
-export function tickRoom(view: RoomView): RoomTickResult {
+/**
+ * Run one room for one tick.
+ *
+ * Takes the engine `room` as well as its view: site placement needs terrain and
+ * occupancy lookups, which the view deliberately does not carry.
+ */
+export function tickRoom(view: RoomView, room: Room): RoomTickResult {
   const now = Game.time;
   const b = board();
 
@@ -90,6 +99,14 @@ export function tickRoom(view: RoomView): RoomTickResult {
   //    creep that would find nothing to do.
   const state = deriveState(view).state;
   const plan = planTasks(b, view, state, now);
+
+  // Sites are placed here, before spawn, so a builder requested this tick has
+  // work to lease in the assign step below rather than idling until the next
+  // tick. Placement itself is engine work, not a creep intent — see game/build.
+  // Guarded because a placement failure must not cost the room its whole tick —
+  // the economy still needs to spawn, assign and execute.
+  const placed =
+    guard(() => placeWanted(room, structureWants(view), view), `construct ${view.name}`) ?? 0;
 
   const intents: Intent[] = [];
 
@@ -115,6 +132,7 @@ export function tickRoom(view: RoomView): RoomTickResult {
   return {
     room: view.name,
     state,
+    placed,
     tally,
     shortfall: shortfall(roleDemand(view, state), populationByRole(view)).map((s) => ({
       role: s.role,

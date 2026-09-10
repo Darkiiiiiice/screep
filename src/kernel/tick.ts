@@ -160,7 +160,7 @@ function tickColony(): void {
   const creeps = Object.values(Game.creeps);
 
   for (const room of rooms.slice().sort((a, b) => (a.name < b.name ? -1 : 1))) {
-    const result = guard(() => tickRoom(viewRoom(room, creeps)), `room ${room.name}`);
+    const result = guard(() => tickRoom(viewRoom(room, creeps), room), `room ${room.name}`);
     if (!result) continue;
 
     // The room name is in the message, not just the throttle signature: with
@@ -172,7 +172,7 @@ function tickColony(): void {
     log(
       'info',
       `room:${room.name}`,
-      `${room.name} ${result.state} creeps=${String(result.population)} intents=${String(result.tally.attempted)} ok=${String(result.tally.succeeded)} deferred=${String(result.tally.deferred)} noRoute=${String(result.tally.noRoute)} reaped=${String(result.reaped)} pruned=${String(result.pruned)} spawn=${result.spawnReason}`,
+      `${room.name} ${result.state} creeps=${String(result.population)} placed=${String(result.placed)} intents=${String(result.tally.attempted)} ok=${String(result.tally.succeeded)} deferred=${String(result.tally.deferred)} noRoute=${String(result.tally.noRoute)} reaped=${String(result.reaped)} pruned=${String(result.pruned)} spawn=${result.spawnReason}`,
     );
   }
 }

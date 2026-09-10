@@ -161,9 +161,11 @@ describe('demand against the real room', () => {
     // the energy is already banked.
     const view = toRoomView(snapshot);
     const state = deriveState(view).state;
+    // `energyAvailable` is the room's stored energy and `energyCapacityAvailable`
+    // its capacity — the pair the saturation check compares.
     const withSpawnAt = (energy: number) => ({
       ...view,
-      spawns: view.spawns.map((s) => ({ ...s, energy })),
+      spawns: view.spawns.map((s) => ({ ...s, energy, energyAvailable: energy })),
     });
 
     // Energy still scarce (the spawn has been drained by spawning): one upgrader.
@@ -172,8 +174,10 @@ describe('demand against the real room', () => {
     expect(scarce?.reason).not.toMatch(/surplus/);
 
     // Spawn full: the surplus is now worth converting, so a second upgrader.
-    const rich = roleDemand(withSpawnAt(view.spawns[0]?.energyCapacityAvailable ?? 300), state)
-      .find((d) => d.role === 'upgrader');
+    const rich = roleDemand(
+      withSpawnAt(view.spawns[0]?.energyCapacityAvailable ?? 300),
+      state,
+    ).find((d) => d.role === 'upgrader');
     expect(rich?.count).toBe(2);
     expect(rich?.reason).toMatch(/surplus/);
   });
@@ -197,7 +201,11 @@ describe('demand against the real room', () => {
           energyCapacity: 2000,
         },
       ],
-      spawns: view.spawns.map((s) => ({ ...s, energy: s.energyCapacityAvailable })),
+      spawns: view.spawns.map((s) => ({
+        ...s,
+        energy: s.energy,
+        energyAvailable: s.energyCapacityAvailable,
+      })),
     };
 
     const state = deriveState(established).state;
