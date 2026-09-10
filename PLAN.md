@@ -307,7 +307,8 @@ flowchart LR
 | **M0 基础设施** ✅ | — | 仓库骨架、构建/类型检查/单测/部署/观测命令、token 连通性与 shard 自动识别 | **已达成**：`typecheck`/`lint`/`test`(8 passed)/`build` 全绿；`whoami` 自动识别 shard3 与 CPU 20；守卫规则经反例测试确认会拦截违规。`deploy`/`watch`/`stats` 均已实测（部署 1/240、console 流、段读取）|
 | **M1 内核骨架** ✅ | — | tick 管线、CPU 预算与降级、cache/heap/memory/stats/log/errors/profiler | **已达成**：54 单测通过；`npm run smoke` 跑真实产物 200 tick × 2 相（常规 + CPU 高压），9 项断言全过——含**降级确实触发**与**关键阶段从不被跳过**；Memory 迁移幂等；stats 段写入且有界 |
 | **M2 任务系统 + 角色** ✅ | — | 任务注册表与租约、角色行为表、状态机、spawn manager | **已达成**：任务租约全生命周期单测覆盖；真实房间 W34S1 回放断言意图序列；**线上实测闭环**：harvester 采满 → 交付 spawn → upgrader 出生 → 控制器进度开始增长（`prog 2→3`）。⚠️ **creep 死亡后的自动补员尚未实测**（需等 1500 tick 寿命到期） |
-| **M3 `BOOTSTRAP`→`ESTABLISHED`** 🔄 | RCL 1–5 | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应、状态迁移判定 | **进行中**：RCL **1→2 已完成**（实测）；extension 建造规划已上线并在建（实测 build +4/tick）；RCL 升级与建造同时推进（实测 RCL prog +1/tick）。待办：RCL 3 的容器建造、2000 tick 无断档验收。⚠️ 未验证：creep 死亡后补员 |
+| **M3 `BOOTSTRAP`→`ESTABLISHED`** 🔄 | RCL 1–5 | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应、状态迁移判定 | **进行中**：RCL **1→2 已完成**（实测）；extension 建造规划已上线并在建（实测 build +4/tick）；RCL 升级与建造同时推进（实测 RCL prog +1/tick）。待办：RCL 3 的容器建造。
+⚠️ **「2000 tick 无断档」已实测失败**：harvester 于 t≈82878740 到达寿命上限死亡，且首次补员失败（死亡螺旋，见 §5.2）——该验收标准**未达成**。修复已上线（§5.3），spawn 正在积累重建资金；需在新代码下重新计量后方可判定。 |
 | **M4 `MATURE`** | RCL 6–7 | link 链路、专用 miner、物流分层、**届时再设计** | RCL 6+；link 生效后 CPU 不升反降 |
 | **M5+ 扩张与对抗** | RCL 8 | claim、远程开采、防御、Power Creeps —— **细节刻意不在此规划** | — |
 
