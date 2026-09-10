@@ -1,28 +1,70 @@
 # Screeps: World AI —— 实施计划
 
 > 目标：从零构建一套可持续演进、可回归验证的 Screeps MMO（screeps.com）AI 脚本。
-> 决策基线（已确认）：仅上官方 MMO；TypeScript + esbuild 精简流水线；纯逻辑单测 + 真实引擎 tick 模拟双轨验证；首个里程碑是内核框架（调度/任务/状态机）；已具备账号与 token 生成能力。
+> 决策基线（已确认）：**只在官方线上玩，不做私服**；TypeScript + esbuild 精简流水线；纯逻辑单测为核心验证手段；首个里程碑是内核框架（调度/任务/状态机）；已有账号与 token。
 
 ---
 
-## 1. 已核实的事实基线
+## 1. 事实基线
+
+### 1.1 运行环境
 
 | 事实 | 值 | 来源 |
 |---|---|---|
 | 官方引擎版本 | `@screeps/engine@4.3.2` | screeps/engine `package.json` |
-| 默认 CPU | 20 ms/tick（未解锁）；bucket 上限 10000；单 tick 最多透支 500 | docs/cpu-limit |
+| **官方线上运行时** | **Node.js v24**（Screeps: World 已升级） | screeps-api v2 迁移指南 |
+| 默认 CPU | 20 ms/tick（未解锁）；解锁后每 GCL +10，上限 300 | docs/cpu-limit、docs/control |
+| bucket | 上限 10,000；单 tick 最多透支 500 | docs/cpu-limit |
 | Memory 上限 | 2 MB，跨 tick 走 `JSON.parse/stringify` | docs/global-objects |
+| 模块系统 | `require` / `module.exports`（CJS 风格），另支持二进制模块（WebAssembly） | docs/modules |
 | 类型定义 | `@types/screeps@3.4.0`（2026-04 更新） | npm registry |
-| 部署工具 | `screeps-api@2.1.0` | npm registry |
-| 本地引擎模拟 | `screeps-server-mockup@1.5.1` → `screeps@4.3.0` → `@screeps/storage@5.1.3`（**lokijs 存储，无需 mongo/redis**） | npm registry 依赖链 |
-| 本地引擎编译前提 | native 编译（`@screeps/driver@5.3.0` 钉 `isolated-vm` git commit）+ node-gyp 12；本机已具备 Python 3.14.7 / make 4.4.1 / g++ 16.2.1；`screeps@4.3.0` 要求 node>=22.9，本机 Node 26.8.2（ABI 147）满足 | npm registry + 本机探测 |
-| 私服方案（后备） | `screepers/screeps-launcher`（Go，2026-09-07 仍在推）—— **自行管理 Node 版本**（默认 Node 24，可用 `nodeVersion` 指定）、自带 npm 包与 mod 安装；**默认存储即 `@screeps/storage`(lokijs)，不装 mongo/redis 也能跑**；`tickRate` 可配（下限 1000ms，官方警告过低会出问题） | launcher README |
-| 官方路线图（2026） | 恢复 3 个月赛季重置；补 Power Creeps（Commander/Executor）；新分片（约 1s tick）；运行时升级到最新 Node，含**原生 ESM 与文件夹模块支持**、官方 VSCode 扩展 | 官方 2026 roadmap |
+| 部署/观测工具 | `screeps-api@2.1.0` —— **仅 ESM**，接口已改名扁平化 | screeps-api v2 迁移指南 |
+| 官方路线图（2026） | 恢复 3 个月赛季重置；补 Power Creeps（Commander/Executor）；新分片（约 1s tick）；运行时升级，含**原生 ESM 与文件夹模块支持**、官方 VSCode 扩展 | 官方 2026 roadmap |
 
-**对架构的两个直接推论**
+**推论**：源码按 ESM 写、构建期打包成单文件（`module.exports.loop`）上传；待官方 ESM 落地，去掉打包步骤改整目录上传即可，源码零改动。构建 target 定 `node24`。
 
-1. 运行时即将支持原生 ESM + 文件夹模块 → 源码按 ES module 写、但**构建期仍打包成单文件 CJS** `main.js` 上传。等官方 ESM 落地后，只需去掉打包步骤、改为整目录上传，源码零改动。
-2. shard / world 名称必须做成配置项 —— 赛季重置与新分片会改变部署目标。
+### 1.2 线上速率限制（**本计划最重要的约束**）
+
+`docs/auth-tokens.md`：浏览器/Steam 客户端的常规请求**不限流**，但**用 token 认证的所有请求都限流**，超限返回 `429`。响应头带 `X-RateLimit-Limit/Remaining/Reset`。
+
+| 端点 | 配额 | 折算 |
+|---|---|---|
+| **全局** | **120 / 分钟** | 2 / 秒 |
+| `POST /api/user/code` | **240 / 天** | **平均 6 分钟一次部署** |
+| `POST /api/user/set-active-branch` | 240 / 天 | 切换激活分支 |
+| `GET /api/user/code` | 60 / 小时 | |
+| `GET /api/user/memory` | 1440 / 天 | 1 / 分钟 |
+| `POST /api/user/memory` | 240 / 天 | |
+| `GET /api/user/memory-segment` | **360 / 小时** | **6 / 分钟 —— 比 Memory 宽 6 倍** |
+| `POST /api/user/memory-segment` | 60 / 小时 | |
+| `POST /api/user/console` | 360 / 小时 | |
+| `GET /api/game/room-terrain` | 360 / 小时 | |
+| `POST /api/game/map-stats` | 60 / 小时 | |
+
+**三条直接设计结论**：
+
+1. **部署 = 消耗预算**。240/天意味着一整个下午的高频迭代就能烧完。→ 每次部署前必须离线验证过关；禁止"改一行推一次"。
+2. **可观测性要选便宜的信道**。统计写进 **memory segment**（6/分钟）而不是 `Memory`（1/分钟）—— 同样的信息量，带宽宽 6 倍。
+3. **逃生舱**：token 可经浏览器点击（reCAPTCHA 保护，无法自动化）获得 **2 小时免限流窗口**（`/a/#!/account/auth-tokens/noratelimit?token=XXX`）；也可用 `GET /api/auth/query-token` 查询该窗口状态。重迭代时段用这个。
+
+### 1.3 分支与环境语义（决定部署策略）
+
+官方 2015 分支公告原话：*"The branch being edited at the moment is the one active in the game. However, **the World may have one active branch, the Simulation another one**."* 官方限流表中存在 `POST /api/user/set-active-branch`（240/天）佐证该机制仍在。
+
+**推论**：
+
+- **世界（World）同一时刻只有一个分支在跑** —— 官方线上**没有 staging 环境**，不存在"dev 和 main 同时跑、A/B 对比"。所谓 dev 分支策略实际是"激活 dev → 观察 → 激活回 main"。
+- **Simulation 模式有独立的分支**，与 World 互不干扰 → 这是线上玩家**唯一的本地安全试验场**（在官方客户端内，浏览器里跑真实引擎）。
+- 客户端 Simulation 是人工交互的，无法在 Node 侧自动化。
+
+### 1.4 关于私服（已排除，仅记录原因）
+
+`screeps-server-mockup@1.5.1`（逐 tick 推进真实引擎的测试夹具）在本机**编译失败**，两轮实测：
+
+- Node 26.8.2 / GCC 16.2.1：`v8::Object::GetAlignedPointerFromInternalField(int)` 参数不匹配 —— Node 26 的 V8 新增了 `EmbedderDataTypeTag` 参数，`isolated-vm@6.1.2`（driver 钉的 2026-03-16 commit）早于这次 V8 API 断裂。
+- Node 24.21.0：`isolated-vm` 自身 C++ 模板匹配错误（`timer.h:25` 的 `wait_detached`），与 Node 版本无关。
+
+且 `@screeps/driver` 直接 `require('isolated-vm')`，无法绕开。**结合"不做私服"的决定，此路线彻底移除**——代价是失去本地真实引擎验证，补偿方案见 §4。
 
 ---
 
@@ -31,54 +73,56 @@
 ```
 screep/
 ├── PLAN.md
-├── package.json  tsconfig.json  eslint.config.js
+├── package.json          # "type": "module"（screeps-api v2 仅 ESM）
+├── tsconfig.json  eslint.config.js
 ├── scripts/
-│   ├── build.mjs          # esbuild → dist/main.js（单文件 CJS）
-│   ├── deploy.mjs         # screeps-api 推送（branch/shard/dry-run）
-│   └── sim.mjs            # screeps-server-mockup 跑 N tick，收集 console/Memory
+│   ├── build.mjs         # esbuild → dist/main.js（单文件，target node24）
+│   ├── deploy.mjs        # 推送 + 激活分支 + 配额记账
+│   ├── watch.mjs         # WebSocket 订阅 console，实时流式输出
+│   └── stats.mjs         # 拉取 memory segment 统计，落 docs/live-metrics.md
 ├── src/
-│   ├── main.ts            # 入口：global 复用 + tick 生命周期
-│   ├── kernel/            # 内核：与游戏内容无关的调度/预算/缓存
-│   │   ├── tick.ts        # 阶段调度 + CPU 预算 + 降级
-│   │   ├── cache.ts       # tick 级对象缓存（getObjectById / room 快照）
-│   │   ├── heap.ts        # global 持久层（跨 tick、不进 Memory）
-│   │   ├── memory.ts      # schema 版本 + 迁移 + GC
-│   │   ├── log.ts         # 结构化日志 + 限流 + console 预算
-│   │   ├── errors.ts      # 错误隔离 / 去重 / 上报
-│   │   ├── profiler.ts    # 分阶段 CPU 统计
-│   │   └── settings.ts    # 全部可调参数集中处
-│   ├── game/              # 引擎适配层：唯一允许直接触碰 Game/Room/Creep 的地方
-│   ├── domain/            # 纯逻辑：禁止 import game/，全部可单测
-│   │   ├── tasks/         # 任务定义 / 注册表 / 生命周期（申请·租约·释放）
-│   │   ├── roles/         # 行为策略（harvest/haul/upgrade/build/defend…）
-│   │   ├── plans/         # 殖民计划：需求计算、配比、body 设计
-│   │   └── economy/       # 能量流与物流配额
-│   ├── colony/            # 组合层：把 domain 的决策落到 game 适配层执行
-│   └── intel/             # 房间情报（M4 起）
+│   ├── main.ts           # 入口：global 复用 + tick 生命周期
+│   ├── kernel/           # 与游戏内容无关的调度/预算/缓存
+│   │   ├── tick.ts       # 阶段调度 + CPU 预算 + 降级
+│   │   ├── cache.ts      # tick 级对象缓存
+│   │   ├── heap.ts       # global 持久层（跨 tick、不进 Memory）
+│   │   ├── memory.ts     # schema 版本 + 迁移 + GC
+│   │   ├── stats.ts      # 统计写入 memory segment（避开限流瓶颈）
+│   │   ├── log.ts        # 结构化日志 + 限流
+│   │   ├── errors.ts     # 错误隔离 / 去重 / 上报
+│   │   ├── profiler.ts   # 分阶段 CPU 统计
+│   │   └── settings.ts   # 全部可调参数集中处
+│   ├── game/             # 引擎适配层：唯一允许触碰 Game/Room/Creep 的地方
+│   ├── domain/           # 纯逻辑：禁止 import game/，全部可单测
+│   │   ├── tasks/        # 任务定义 / 注册表 / 生命周期
+│   │   ├── roles/        # 行为策略
+│   │   ├── plans/        # 殖民计划：需求计算、配比、body 设计
+│   │   └── economy/      # 能量流与物流配额
+│   └── colony/           # 组合层：把 domain 决策落到 game 适配层执行
 ├── test/
-│   ├── unit/              # 轨道 A：fixture 单测（vitest，毫秒级）
-│   ├── fixtures/          # Game/Room/Creep 打桩构造器 + 录制的房间快照
-│   └── sim/               # 轨道 B：真实引擎 tick 模拟断言
-└── dist/                  # 构建产物（不入库）
+│   ├── unit/             # 轨道 A：纯逻辑单测（vitest）
+│   ├── fixtures/         # 自建 Game stub + 从线上录制的真实快照
+│   └── replay/           # 轨道 B：录制回放，断言命令序列
+└── dist/                 # 构建产物（不入库）
 ```
 
 ### 不可动摇的架构不变式
 
 > **`domain/` 永不 import `game/`；`game/` 是唯一 import 引擎全局的层。**
 
-这条不是洁癖：双轨验证的可行性完全建立在它之上。轨道 A 能毫秒级跑，是因为纯逻辑不依赖 `Game`；如果哪天某段逻辑绕过了适配层，轨道 A 就废了，验证成本瞬间回到"只能上线看 console"。
+去掉私服后，这条不变式的权重**从"提高可测性"上升到"唯一的安全网"**：官方线上没有 staging，任何绕开适配层的代码都只能靠线上真实世界试错，而每次部署要花掉 240/天 里的 1 次，且可能赔掉 creep。适配层薄、domain 纯，是让离线验证有意义的前提。
 
-### 选型理由与版本
+### 版本选择
 
 | 项 | 选择 | 理由 |
 |---|---|---|
-| 语言 | TypeScript | `@types/screeps@3.4.0` 提供完整 API 类型；AI 规模到几千行后，API 误用是主要 bug 源 |
-| 打包 | esbuild 0.28 → 单文件 CJS | 零配置、毫秒级增量；不用 rollup（starter 里的 rollup 2 + TS 4.8 已落后于 Node 26 生态） |
-| 类型检查 | `tsc --noEmit` 独立于打包 | esbuild 只剥类型不做检查，类型门禁必须单独一步 |
-| 单测 | vitest 5 | 原生 TS/ESM、watch 快；不用 mocha+ts-node 那套旧组合 |
-| 引擎模拟 | screeps-server-mockup 1.5.1 | 唯一能"一次一 tick"推进真实引擎并读中间态的方案 |
-| 部署 | screeps-api 2.1.0 | 官方 API 封装，支持 branch/shard |
-| 不引入 | 任何社区 AI 框架（Overmind 等） | 黑盒内核会挡住 M1 的目标；但会借鉴其 CPU 预算与 cache 分层思路 |
+| 语言 | TypeScript | `@types/screeps@3.4.0` 提供完整 API 类型；AI 到几千行后 API 误用是主要 bug 源 |
+| 模块 | ESM（`"type": "module"`） | `screeps-api@2` 仅 ESM；ESM 也是官方运行时演进方向 |
+| 打包 | esbuild 0.28 → 单文件，`target: node24` | 零配置、毫秒级增量；target 对齐官方运行时，避免产出 Node 24 不认的语法 |
+| 类型检查 | `tsc --noEmit` 独立于打包 | esbuild 只剥类型不检查，类型门禁必须独立一步 |
+| 单测 | vitest 5 | 原生 TS/ESM、watch 快 |
+| 线上交互 | screeps-api 2.1.0 | `ScreepsHttpClient` + `ScreepsSocketClient` |
+| 不引入 | 任何社区 AI 框架（Overmind 等） | 黑盒内核会挡住 M1 目标；仅借鉴其 CPU 预算与缓存分层思路 |
 
 ---
 
@@ -93,48 +137,49 @@ flowchart LR
   C --> D[spawn<br/>补员与 body 设计]
   D --> E[assign<br/>任务申请/租约]
   E --> F[execute<br/>creep 行为]
-  F --> G[cleanup<br/>GC + Memory 写回]
+  F --> G[cleanup<br/>GC + 统计写 segment]
 ```
 
-- 每阶段记录 `Game.cpu.getUsed()` 差值，进 `profiler`，tick 末统一输出。
-- **降级**：当 `Game.cpu.getUsed() > tickBudget × 0.8`，按优先级表跳过后续低优先级阶段（如情报扫描、路径预计算），保执行与补员。
-- **预算**：`tickBudget = min(Game.cpu.tickLimit, Game.cpu.limit + 允许的 bucket 借用)`，并预留约 12% 给 cleanup；bucket 低于阈值时禁止昂贵重算（PathFinder、远矿扫描）。
+- 每阶段记录 `Game.cpu.getUsed()` 差值，进 `profiler`，按间隔汇总。
+- **降级**：`Game.cpu.getUsed() > tickBudget × 0.8` 时按优先级表跳过低优先级阶段，保执行与补员。
+- **预算**：`tickBudget` 取 `Game.cpu.tickLimit` 与 `limit + 允许借用` 的较小值，预留约 12% 给 cleanup；bucket 低于阈值时禁止昂贵重算（PathFinder、远矿扫描）。
 
-### 3.2 各内核服务
+### 3.2 内核服务
 
 | 服务 | 职责 | 关键约束 |
 |---|---|---|
-| `cache` | tick 级 `getObjectById` Map 缓存、room 对象快照；跨 tick 只缓存静态数据（地形、CostMatrix）并按 `Game.time % N` 失效 | 不缓存可变对象引用跨 tick |
-| `heap` | `global` 里的跨 tick 状态，以 id 为键 | 引擎重启会清空，任何 heap 数据都必须可从 `Game`/`Memory` 重建 |
-| `memory` | schema 版本号 + 顺序迁移函数 + 死亡 creep 惰性 GC | 迁移必须幂等；每 tick 只 GC 一部分 |
-| `log` | `log(scope, level, msg, data)`，同类消息限流 | console 有 CPU 成本且过量会被截断，必须有预算 |
-| `errors` | 按「签名 + 位置」去重，仅在首次/每 N tick 输出；错误栈压进 `Memory` 环形缓冲（最近 50 条） | 单点异常绝不能中断整 tick |
-| `profiler` | 分阶段 CPU + creep 数 + 内存大小的每 N tick 汇总 | 汇总本身有成本，用递增间隔 |
+| `cache` | tick 级 `getObjectById` Map 缓存、room 快照；跨 tick 只缓存静态数据（地形、CostMatrix）并按 `Game.time % N` 失效 | 不缓存可变对象引用跨 tick |
+| `heap` | `global` 里的跨 tick 状态，以 id 为键 | 引擎重启会清空，任何 heap 数据必须可从 `Game`/`Memory` 重建 |
+| `memory` | schema 版本 + 顺序迁移 + 死亡 creep 惰性 GC | 迁移必须幂等；每 tick 只 GC 一部分 |
+| `stats` | **统计写入 memory segment，不走 `Memory`** | 见 §3.5：segment 的读取配额是 `Memory` 的 6 倍 |
+| `log` | `log(scope, level, msg, data)`，同类消息限流 | console 有 CPU 成本且过量会被截断 |
+| `errors` | 按「签名 + 位置」去重，仅首次/每 N tick 输出；栈压进 `Memory` 环形缓冲（最近 50 条） | 单点异常绝不能中断整 tick |
+| `profiler` | 分阶段 CPU + creep 数 + 内存大小，按递增间隔汇总 | 汇总本身有成本 |
 
-### 3.3 Memory 策略（从 M1 就锁死）
+### 3.3 Memory 策略（M1 就锁死）
 
 - `Memory` **只存**：schema 版本、任务租约、情报摘要、参数覆盖。
 - **禁止 per-creep 状态**（`Memory.creeps.*` 只留角色与最小标记）。creep 个体状态走 heap 以 id 索引 —— 直接规避 2 MB 上限与每 tick 全量 `JSON.stringify` 成本。
-- 大块情报（房间地图、CostMatrix）走 `RawMemory` segment，不进 `Memory`。
+- 大块情报（房间地图、CostMatrix）与**统计**都走 `RawMemory` segment。
 
 ### 3.4 殖民地状态机（按 RCL 键控）
 
-角色不是静态列表 —— 同一批角色在 RCL1 和 RCL6 该干的事完全不同（RCL1 无容器，只能 source↔spawn 直连搬运；RCL6 有 storage/terminal/link，需要物流层）。因此**房间行为由其 RCL 导出的状态决定**：
+角色不是静态列表 —— 同一批角色在 RCL1 和 RCL6 该干的事完全不同。房间行为由其 RCL 导出的状态决定：
 
 | 状态 | RCL | 结构前提 | 角色配比（示意） | 主要矛盾 |
 |---|---|---|---|---|
-| `BOOTSTRAP` | 1–2 | 无容器 / 刚出容器 | harvester 直接自采自送；1 个 upgrader | 能量总量不足，任何多余角色都会饿死 |
-| `ESTABLISHED` | 3–5 | 容器、extensions | harvester 定点 + hauler 转运 + upgrader + builder | 物流效率；补员节奏跟不上消耗 |
-| `MATURE` | 6–7 | storage、terminal、link | 引入 link 链路、专用 miner、物流分层 | CPU 预算与房间数同时上升 |
-| `EXPANSION` | 8 | 全量 | 在 MATURE 基础上分出殖民/远程队 | 跨房调度与 CPU 分配 |
+| `BOOTSTRAP` | 1–2 | 无容器 / 刚出容器 | harvester 自采自送；1 个 upgrader | 能量总量不足，多余角色会饿死 |
+| `ESTABLISHED` | 3–5 | 容器、extensions | harvester 定点 + hauler 转运 + upgrader + builder | 物流效率；补员节奏 |
+| `MATURE` | 6–7 | storage、terminal、link | link 链路、专用 miner、物流分层 | CPU 预算与房间数同时上升 |
+| `EXPANSION` | 8 | 全量 | MATURE 基础上分出殖民/远程队 | 跨房调度与 CPU 分配 |
 
-状态阈值直接取自官方 RCL 结构表（`docs.screeps.com/control.html`），这些数字就是状态迁移的判定依据：
+阈值取自官方 RCL 结构表（`docs/control.html`）：
 
 | RCL | 升到下一级所需能量 | 该级解锁的关键结构 |
 |---|---|---|
 | 0 | — | 中立/未占领（仅 roads、5 containers） |
-| 1 | 200 | **1 Spawn** ← 占领后即时可达 |
-| 2 | 45,000 | 5 Extensions（50 容量） |
+| 1 | **200** | **1 Spawn** |
+| 2 | **45,000** | 5 Extensions（50 容量） |
 | 3 | 135,000 | 10 Extensions、**1 Tower** |
 | 4 | 405,000 | 20 Extensions、**Storage** |
 | 5 | 1,215,000 | 30 Extensions、**2 Links** |
@@ -144,63 +189,119 @@ flowchart LR
 
 关键含义：
 
-- RCL **1→2 只需 200 能量**，而 **2→3 要 45,000**（225 倍）—— 这是整个前中期最陡的性价比断崖。`BOOTSTRAP` 到 `ESTABLISHED` 的迁移判据必须围绕"何时能稳定产出 45k 能量"来定，而不是简单地看等级数字。
-- 容器上限只有 **5 个**（RCL 0 起就是 5，之后不增），因此容器选址是**一次性决策**，选错了没有第二次机会 —— 这条要在 M3 里当成硬约束写进测试。
-- `ESTABLISHED` 的能量累计目标：RCL 1→5 共需 200 + 45,000 + 135,000 + 405,000 = **585,200 能量**（即 M3 验收标准的由来）。
-- Controller 在 RCL 1 的降级计时是 **20,000 tick**，这意味着"停更 upgrader"在 RCL 1 就有致命风险 —— 补员优先级里 upgrader 不能排太低。
+- RCL **1→2 只需 200 能量**，而 **2→3 要 45,000**（225 倍）—— 前中期最陡的性价比断崖。`BOOTSTRAP`→`ESTABLISHED` 的迁移判据要围绕"何时能稳定产出 45k 能量"，而非等级数字。
+- 容器上限恒为 **5 个**（RCL 0 起即 5，之后不增）→ 容器选址是**一次性决策**，选错没有第二次机会。M3 里当硬约束写进测试。
+- `ESTABLISHED` 累计能量目标：RCL 1→5 共 `200 + 45,000 + 135,000 + 405,000 = 585,200`（M3 验收标准的由来）。
+- Controller 在 RCL 1 的降级计时 **20,000 tick** → "停更 upgrader"在 RCL 1 就会致命，补员优先级里 upgrader 不能排太低。
 
 - 状态**只由 `room.controller.level` + 实际建成的结构推导**，不存 Memory（可从 `Game` 重建，符合 §3.2 heap 不变式）。
-- 每个状态声明自己需要的角色清单与数量；`domain/plans/` 按当前状态算需求，spawn manager 照单补员。
-- 状态迁移是**单向且带滞后**（RCL 掉了或结构被拆，退回上一状态），避免在阈值上抖动。
+- 每个状态声明自己需要的角色清单与数量；`domain/plans/` 按当前状态算需求。
+- 状态迁移**单向且带滞后**，避免在阈值上抖动。
 
-这条设计同时是里程碑的排序依据 —— 见 §5。
+### 3.5 线上可观测性（去掉私服后的**一等交付物**）
 
+没有本地引擎，线上观测就是唯一的真实反馈源；而它受 §1.2 配额约束。因此观测设计必须在 M1 就位，且**默认省钱**：
 
+| 手段 | 信道 | 成本 | 用途 |
+|---|---|---|---|
+| 脚本 console 输出 | WebSocket 订阅 `console` | **不走 HTTP 配额**（token 需含 websocket 事件权限） | 实时事件流、异常、里程碑 |
+| 统计快照 | `RawMemory` segment + `GET /api/user/memory-segment` | **360/小时（6/分钟）** | CPU/creep 数/RCL/内存的趋势曲线 |
+| 全量 Memory 转储 | `GET /api/user/memory` | 1440/天（1/分钟） | 低频深挖、故障复盘 |
+| 控制台求值 | `POST /api/user/console` | 360/小时 | 手动探查线上状态 |
+| 房间地形 | `GET /api/game/room-terrain` | 360/小时 | 情报预计算，结果缓存进 segment |
 
-### 轨道 A —— fixture 单测（快速、离线、确定性）
+设计要点：
 
-- 自建 `test/fixtures/` 打桩构造器，不依赖任何引擎包。
-- 只断言**行为契约**：需求计算给出的配额、任务租约的互斥与释放、body 设计与可用能量的对应、优先级抢占顺序、内存迁移幂等性。
+- **统计走 segment 而非 `Memory`** —— 同一份数据的读取配额宽 6 倍，这是纯粹的白拿。
+- `scripts/watch.mjs` 常驻订阅 WebSocket console，滚动输出到终端与日志文件；这是开发时的主观测面。
+- `scripts/stats.mjs` 按固定间隔（默认 60s，可调）拉 segment，追加到 `docs/live-metrics.md`，形成可回溯的指标曲线。
+- 所有 API 调用经一个薄封装，内置**配额记账**（按 §1.2 表）+ 429 处理基线（全局 429 自动重试默认开；端点 429 默认关，需显式处理）。
+- token 建议**按权限拆分**：一个含 websocket 事件的观测 token、一个含 `user/code` 的部署 token —— 缩小泄漏面，也便于分别定位限流来源。
+
+---
+
+## 4. 验证策略（无本地引擎）
+
+私服路线移除后，验证完全由这四层构成。**A 是主力**，C/D 是真实世界校验。
+
+### 轨道 A —— 纯逻辑单测（主力，离线、毫秒级）
+
+- `test/fixtures/` 自建 Game/Room/Creep 打桩构造器，不依赖任何引擎包。
+- 只断言**行为契约**：需求计算给出的配额、任务租约的互斥与释放、body 设计与可用能量的对应、优先级抢占顺序、状态迁移判定（含 RCL 阈值边界）、内存迁移幂等性。
 - 不写"检查字段被复制/默认值/转发"这类实现断言。
 
-### 轨道 B —— 真实引擎 tick 模拟（集成、暴露物理语义）
+### 轨道 B —— 录制回放（离线的集成级验证）
 
-- `screeps-server-mockup` 起私服（lokijs，无外部服务），`world.stubWorld()` 提供 9 房间，`addBot` 注入我们的 `dist/main.js` 作为 module，循环 `server.tick()`。
-- 采集 `bot.on('console')`、`bot.memory`、`bot.newNotifications`，断言宏观指标（例：N tick 内首个 harvester 出生、M tick 内 RCL≥2、无 CPU 超限、无异常洪水）。
-- **先决风险**：`isolated-vm` 需在本机 Node 26 上 native 编译成功。M0 第一件事就是验证它。
-- **失败降级（轨道 B'）**：从 MMO 线上导出真实房间状态为 fixture，本地回放 `loop` 并断言"发出的命令序列"，不做物理推进 —— 仍能覆盖决策正确性，代价是丢掉移动/伤害/资源真实语义。
+- 用 `screeps-api` 从线上抓取真实快照（房间对象、Memory、地形、creep 状态），存为 fixture。
+- 本地对快照跑**完整 loop**（domain + 适配层），断言**发出的命令序列**（`creep.moveTo` / `spawnCreep` / `transfer` 的调用与参数）。
+- 价值：覆盖适配层与 domain 的集成 bug（undefined 访问、id 失效、类型错配），这些是轨道 A 的 stub 天然测不到的；且**完全不消耗线上配额**。
+- 局限（诚实标注）：不做物理推进，验证不了移动/伤害/资源消耗的真实语义 —— 这部分只能靠轨道 D。
 
-### 轨道 C —— 线上核对
+### 轨道 C —— 客户端 Simulation 模式（人工）
 
-- 只推 `dev` 分支，用 `screeps-api` 拉 console 日志与 Memory 快照核对；关键指标（creep 数、CPU 均值/峰值、RCL、Memory 大小）记入 `docs/live-metrics.md`。
-- `main` 分支只在轨道 A/B 通过后才推送。
+- 官方客户端内的本地模拟，跑真实引擎，且有**独立于 World 的分支** → 线上玩家唯一的本地安全试验场。
+- 用 `deploy.mjs` 把代码推到 sim 分支（同样消耗 `POST /api/user/code` 配额），在客户端里人工观察。
+- 适合验证"新策略在小世界里到底会不会动"这种 A/B 都答不了的问题。
+
+### 轨道 D —— World 线上观察（真实世界）
+
+- 激活分支 → `watch.mjs` 盯 console → `stats.mjs` 采指标。
+- **回滚预案是硬前提**：保留一个已知可用的分支，出问题时 `set-active-branch` 切回（每次操作 1 个配额，一次部署+回滚合计 4 个配额）。
+- 上线节奏：小步、可观测、可回滚。
+
+> **诚实标注的能力边界**：去掉私服后，**无法在本地验证引擎物理语义**（移动耗时、伤害结算、资源消耗速率、结构耐久）。这部分只能靠轨道 C/D 的真实世界反馈，因此 M1–M3 的策略必须**保守**：优先选择行为可预测的简单动作，避免把复杂假设直接压到线上试验。
 
 ---
 
 ## 5. 里程碑与验收标准
 
-| 里程碑 | 对应殖民状态 | 内容 | 可观测验收标准 |
+| 里程碑 | 对应状态 | 内容 | 可观测验收标准 |
 |---|---|---|---|
-| **M0 基础设施** | — | 仓库初始化、构建/类型检查/测试/部署/sim 五条命令、MMO token 连通性核对 | `npm run typecheck && npm test && npm run build` 全绿；`npm run sim` 跑 100 tick 并拿到 console；`screeps-api` `me()` 返回正确用户名与目标 shard |
-| **M1 内核骨架** | — | tick 管线、CPU 预算与降级、cache/heap/memory/log/errors/profiler | 空内核连续 200 tick 稳定；profiler 输出各阶段耗时；注入一处故意抛错，tick 不中断且错误只上报一次；Memory 大小恒定 |
-| **M2 任务系统 + 角色** | — | 任务注册表与租约、角色行为表、**状态机骨架（先只实现 `BOOTSTRAP`）**、spawn manager | 轨道 A 覆盖任务全生命周期（申请/抢占/超时释放）；轨道 B 中 creep 自主完成 harvest → deliver 全链，死亡后自动补员 |
-| **M3 `BOOTSTRAP`→`ESTABLISHED`** | RCL 1–5 | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应、状态迁移判定 | **连续 2000 tick 无 creep 断档**；RCL **1→5**（累计投入 585,200 能量）；CPU 峰值 < 20；Memory 波动 < 5% |
+| **M0 基础设施** | — | 仓库骨架、构建/类型检查/单测/部署/观测五条命令、token 连通性与配额记账 | `npm run typecheck && npm test && npm run build` 全绿；`authMe()` 返回正确用户名与目标 shard；配额记账器能报出当日已用次数；`watch.mjs` 能收到线上 console |
+| **M1 内核骨架** | — | tick 管线、CPU 预算与降级、cache/heap/memory/stats/log/errors/profiler、**可观测性就位** | 空内核上线连续 200 tick 稳定；profiler 输出各阶段耗时；注入一处故意抛错，tick 不中断且错误只上报一次；Memory 大小恒定；**segment 统计曲线可在本地拉取** |
+| **M2 任务系统 + 角色** | — | 任务注册表与租约、角色行为表、**状态机骨架（先只实现 `BOOTSTRAP`）**、spawn manager | 轨道 A 覆盖任务全生命周期；轨道 B 回放线上快照能产出正确命令序列；线上 creep 完成 harvest → deliver 全链，死亡后自动补员 |
+| **M3 `BOOTSTRAP`→`ESTABLISHED`** | RCL 1–5 | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应、状态迁移判定 | **连续 2000 tick 无 creep 断档**（按线上实际 tick 时长折算约数小时，需实测标定）；RCL **1→5**（累计 585,200 能量）；CPU 峰值 < 20；Memory 波动 < 5% |
 | **M4 `MATURE`** | RCL 6–7 | link 链路、专用 miner、物流分层、**届时再设计** | RCL 6+；link 生效后 CPU 不升反降 |
 | **M5+ 扩张与对抗** | RCL 8 | claim、远程开采、防御、Power Creeps —— **细节刻意不在此规划** | — |
 
-> **M4 起刻意不做详细规划。** 远程开采、Power Creeps、市场这些内容只有在 M3 指标达成、且 RCL 真的推到那一档时，约束条件（CPU 预算余量、房间地形、邻居威胁）才具体到可以做设计。现在写细节等于对着想象写代码 —— 到 M4 开头单独出一版设计。
+> **M4 起刻意不做详细规划。** 远程开采、Power Creeps、市场这些内容，只有在 M3 指标达成、RCL 真的推到那一档时，约束条件（CPU 余量、房间地形、邻居威胁）才具体到可做设计。现在写细节等于对着想象写代码 —— 到 M4 开头单独出一版设计。
 >
-> 硬约束：M1 只交付上表内核服务，**任何新增抽象都必须在 M3 的指标上有对应收益**。内核框架的最大风险是自我膨胀到永远没有可玩产出。
+> 硬约束：M1 只交付上表内核服务 + 可观测性，**任何新增抽象都必须在 M3 的指标上有对应收益**。内核框架的最大风险是自我膨胀到永远没有可玩产出。
 
 ---
 
-## 6. 部署与配置
+## 6. 部署与配额预算
 
-- 环境变量（`.env`，不入库）：`SCREEPS_TOKEN`、`SCREEPS_BRANCH`（`main`/`dev`）、`SCREEPS_SHARD`。
-- 命令：`npm run build` / `typecheck` / `test` / `sim` / `deploy`。
-- 分支策略：`dev` 分支先在 MMO 上跑观察 → 轨道 A/B 通过 → 推 `main`。
-- 回滚：保留上一版 `dist/main.js` 产物，`deploy` 支持指定本地文件回推。
-- 构建产物：开发分支可选带 inline sourcemap 以便线上栈追踪；生产分支不带（省流量与体积）。
+### 6.1 环境与凭据
+
+- `.env`（不入库）：`SCREEPS_TOKEN_DEPLOY`（含 `user/code`）、`SCREEPS_TOKEN_WATCH`（含 websocket 事件）、`SCREEPS_SERVER`（默认 `main`）、`SCREEPS_SHARD`。
+- 凭据文件走 screeps-api v2 支持的 `screeps.json` 格式；`fromConfig('main')` 现在要求显式传服务器名。
+
+### 6.2 命令
+
+`npm run build` / `typecheck` / `test` / `deploy` / `watch` / `stats`
+
+### 6.3 部署配额预算（240 次/天）
+
+| 场景 | 单次成本 | 说明 |
+|---|---|---|
+| 一次部署 | 1（`POST /api/user/code`） | |
+| 激活分支 | 1（`set-active-branch`） | 只有切换分支才需要 |
+| 回滚到已知good分支 | 1 | |
+| 完整"部署 + 激活 + 回滚" | 4 | 最坏情况预算 |
+
+策略：
+
+- **默认只推当前激活分支** → 一次部署 1 个配额，不额外消耗。
+- **保留一个已知可用分支**作为回滚点；实验性改动推另一个分支，激活前先在 sim 分支验过。
+- 单日部署上限设为 **60**（留 4 倍余量应对意外），`deploy.mjs` 硬性拦截超限。
+- 需要高频迭代时，走 §1.2 的 **2 小时免限流窗口**（人工点击获取），此时放开发上限。
+
+### 6.4 观测配额预算
+
+- 统计拉取默认 60s 一次 → 1440 次/天，正好卡在 `GET /api/user/memory-segment` 的 360/小时（8640/天）**之内**，余量充足。
+- 全量 Memory 转储仅在故障复盘时手动触发，不计入常态预算。
+- WebSocket console 不占 HTTP 配额 → 常态观测尽量压在这个信道上。
 
 ---
 
@@ -208,38 +309,37 @@ flowchart LR
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
-| `isolated-vm`（`@screeps/driver@5.3.0` 钉的 git commit）在 Node 26 编译失败 | 轨道 B 不可用 | **已在验证中**（`~/.cache/screeps-spike`）；失败则切 `screeps-launcher`（自带 Node 24，绕开本机 Node 26 的 ABI 问题），再失败切轨道 B'（fixture 回放） |
-| `@types/screeps@3.4.0` 与 TS 7.0.2 不兼容 | 类型门禁报错 | 回退并 pin TS 5.x；打包走 esbuild，不受影响 |
+| **无本地真实引擎验证** | 物理语义（移动/伤害/资源）错误只能在线上暴露 | 轨道 A+B 覆盖决策与集成；M1–M3 策略保守；轨道 C（客户端 sim）做人工预验 |
+| **线上无 staging 环境** | 坏代码直接作用于真实世界，可能赔掉 creep | 已知可用分支 + 即时回滚；小步部署；`set-active-branch` 成本仅 1 配额 |
+| **部署配额 240/天被烧光** | 当天无法再修线上问题 | 离线验证过关才部署；`deploy.mjs` 硬限 60/天；必要时用 2 小时免限流窗口 |
+| **观测配额 429** | 监控断档，故障时瞎眼 | 统计走 segment（6/分钟）；常态观测压 WebSocket；薄封装内置配额记账与 429 基线处理 |
+| **CPU 20 是硬顶**（未解锁时 GCL 涨也不加 CPU） | M4/M5 的多房间方案在 20 CPU 下不可行 | 见 §8.1；在 20 CPU 内把单房间做到极致本身就是 M3 目标 |
+| Memory 2 MB 与序列化成本 | 中后期性能崩塌 | M1 起禁止 per-creep Memory；情报与统计走 segment |
+| **赛季重置 / 新分片** | 部署目标与策略失效；新分片 tick 更快 | shard/world 一律走配置项；赛季重置期是重构窗口 |
+| 适配层被绕过 | 离线验证失去意义，退化为线上试错 | `domain/` 禁止 import `game/`，用 lint 规则硬性拦截 |
 | 内核过度设计 | M3 长期无产出 | M1 硬性服务清单 + 新增抽象需 M3 指标支撑 |
-| **CPU 20 是硬顶**（未解锁时 GCL 涨也不加 CPU） | M4/M5 的多房间方案在 20 CPU 下不可行 | 见 §8 决策项；在 20 CPU 内把单房间做到极致本身即 M3 目标 |
-| Memory 2 MB 与序列化成本 | 中后期性能崩塌 | M1 起禁止 per-creep Memory；情报走 RawMemory segment |
-| 赛季重置 / 新分片 | 部署参数失效 | shard/world 一律走配置项 |
-| 上线事故无法回滚 | 生产中断 | 只从 `dev` 分支观察通过后才动 `main`；保留上一版产物 |
-| MMO 无沙箱试错 | 破坏性实验代价高 | 破坏性/高风险改动先在轨道 B 的私服世界验证 |
+| `@types/screeps@3.4.0` 与 TS 7.0.2 不兼容 | 类型门禁报错 | 回退并 pin TS 5.x；打包走 esbuild 不受影响 |
 
 ---
 
-## 8. 需要你拍板的两件事（无法由代码或文档决定）
+## 8. 需要你拍板的一件事
 
-### 8.1 CPU Unlock —— 决定 M4 是否可行
+### CPU Unlock —— 决定 M4 是否可行
 
-官方规则：**未解锁时 CPU 固定 20**（`Game.cpu.limit`），GCL 提升不会加 CPU；解锁后每 GCL +10，上限 300。bucket 上限 10,000、单 tick 可透支最多 500，所以 20 CPU 靠攒 bucket 能做**偶发**重算（PathFinder），但扛不住**持续**的多房间负载。
+官方规则：**未解锁时 CPU 固定 20**，GCL 提升**不会**加 CPU；解锁后每 GCL +10，上限 300。bucket 上限 10,000、单 tick 最多透支 500，所以 20 CPU 靠攒 bucket 能做**偶发**重算（PathFinder），但扛不住**持续**多房间负载。
 
-- 若长期不解锁：M4/M5 应重新定义为"在 20 CPU 内把单房间做到极致 + 极轻量远程开采"，多房间扩张不现实。这其实是个挺有嚼头的约束 —— 20 CPU 下的极限优化比堆房间更考验工程。
-- 若愿意解锁：M4 的多房间路线按原计划推进，但要在 M5 加入"CPU 预算随 GCL 重算"的逻辑。
+- **不解锁**：M4/M5 重定义为"在 20 CPU 内把单房间做到极致 + 极轻量远程开采"。这是个有嚼头的约束 —— 20 CPU 下的极限优化比堆房间更考验工程。
+- **解锁**：M4 多房间按原计划推进，M5 加入"CPU 预算随 GCL 重算"。
 
-**这不影响 M0–M3** —— 20 CPU 正好是 M3 的硬指标，先按不解锁做，届时再定。
-
-### 8.2 是否接受 `screeps-launcher` 作为后备私服
-
-它自带 Node 24（绕开本机 Node 26 的 native 编译风险），但会**自行管理一份 Node 运行时**并在项目外写入。若你不希望机器上多出一个自管 Node，我就只能选轨道 B'（fixture 回放，丢掉物理语义）。
+**不影响 M0–M3** —— 20 CPU 正好是 M3 的硬指标，先按不解锁做，届时再定。
 
 ---
 
-## 9. 立即执行（P0 前置验证）
+## 9. 立即执行（P0）
 
 1. ~~`git init`~~ 已完成（`7a5610c`）。
-2. **验证本地引擎**（进行中）：`~/.cache/screeps-spike` 正在 `npm i screeps-server-mockup`，即在验证 `isolated-vm` 能否在 Node 26 编译 —— 决定轨道 B 是否成立。
-3. **验证 MMO 连通**：用 `screeps-api` 调 `me()`，确认 token 有效并记录目标 shard 名称。
+2. **搭仓库骨架**：`package.json`（`"type": "module"`）+ tsconfig + esbuild/vitest/eslint + 五条命令脚本。
+3. **验证线上连通与配额**：用 `screeps-api@2` 的 `ScreepsHttpClient`（注意 v2 接口名）调 `authMe()`，确认 token 有效、记录目标 shard，并从响应头读出全局配额的 `Limit/Remaining/Reset` —— 这一步同时验证了凭据与限流观测能力。
+4. **验证观测信道**：`ScreepsSocketClient` 订阅 `console`，确认能收到线上脚本输出。
 
-第 2、3 项任一失败都会改变后续方案，因此必须先做完再进 M1。
+第 3、4 项是"只玩线上"模式的地基（凭据 + 观测），任一失败都要先解决再进 M1。
