@@ -18,6 +18,7 @@
 import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { bodyCost, buildCreep, buildRoom, CONSTANTS, newestSnapshot } from './lib/fake-room.mjs';
 
 // Hold the real console before any engine stub replaces `globalThis.console`,
 // otherwise this script's own output would be captured as game output.
@@ -54,13 +55,17 @@ function installEngine({ cpuLimit }) {
     },
   };
 
+  // Objects the bundle resolves by id. Populated by the colony phase so the
+  // real adapter and executor see the room's actual structures.
+  const objects = new Map();
+
   const game = {
     time,
     cpu,
     creeps: {},
     rooms: {},
-    getObjectById() {
-      return null;
+    getObjectById(id) {
+      return objects.get(id) ?? null;
     },
   };
 
@@ -82,6 +87,9 @@ function installEngine({ cpuLimit }) {
     game,
     rawMemory,
     logs,
+    addObject(id, object) {
+      objects.set(id, object);
+    },
     memory: () => globalThis.Memory,
     advance() {
       time += 1;
@@ -159,6 +167,90 @@ const pressureChecks = [
   ],
 ];
 
+out.log('');
+out.log('[smoke] phase 3: colony against a real recorded room');
+const snapshot = newestSnapshot();
+let colonyChecks = [];
+
+if (!snapshot) {
+  out.log('  SKIP  no recorded snapshot — run `npm run snapshot` first');
+} else {
+  out.log(`[smoke] replaying room ${snapshot.room} (recorded at gameTime ${String(snapshot.gameTime)})`);
+
+  // Fresh globals: the colony needs its own heap state, and reusing the profile
+  // phase's heap would leave stale task leases in place.
+  const colony = installEngine({ cpuLimit: 20 });
+  const spawnRequests = [];
+  const creeps = [];
+  const built = buildRoom(snapshot, {
+    creeps,
+    onSpawn: (req) => {
+      spawnRequests.push(req);
+      // Register the creep so the next tick sees it, exactly as the engine would
+      // once the spawn completes.
+      const c = buildCreep(req.name, req.memory?.role ?? 'harvester', 24, 10, snapshot.room, 0);
+      creeps.push(c);
+      colony.game.creeps[req.name] = c;
+      colony.memory.creeps ??= {};
+      colony.memory.creeps[req.name] = req.memory ?? {};
+    },
+  });
+  colony.game.rooms[snapshot.room] = built.room;
+  colony.memory.creeps = {};
+  for (const o of built.objects) colony.addObject(o.id, o);
+
+  // The engine injects these as globals; the bundle's adapter reads them.
+  Object.assign(globalThis, CONSTANTS);
+
+  let colonyFailures = 0;
+  for (let i = 0; i < 60; i += 1) {
+    try {
+      bundle.loop();
+    } catch (err) {
+      colonyFailures += 1;
+      if (colonyFailures <= 3) out.error(`[smoke] colony tick ${String(i + 1)} threw: ${err.message}`);
+    }
+    // A spawn takes a few ticks; complete it so the creep participates.
+    for (const s of built.spawns) if (s.spawning) s.spawning = null;
+    colony.advance();
+  }
+
+  // The colony's per-room line names the room and its derived state.
+  const colonyLogs = colony.logs.filter((l) => l.includes(snapshot.room));
+  colonyChecks = [
+    ['colony ticks did not throw', colonyFailures === 0, `${colonyFailures} exceptions`],
+    [
+      'the colony issued a spawn request',
+      spawnRequests.length > 0,
+      `0 requests; last log: ${colonyLogs.at(-1) ?? '(none)'}`,
+    ],
+    [
+      'the first spawn requested is a harvester',
+      spawnRequests[0]?.memory?.role === 'harvester',
+      JSON.stringify(spawnRequests[0]?.memory ?? null),
+    ],
+    [
+      'the requested body is affordable by the real room',
+      spawnRequests.length > 0 && bodyCost(spawnRequests[0].body) <= built.room.energyCapacityAvailable,
+      spawnRequests.length > 0
+        ? `cost ${String(bodyCost(spawnRequests[0].body))} vs capacity ${String(built.room.energyCapacityAvailable)}`
+        : '',
+    ],
+    [
+      'the body includes MOVE, so the creep is not stranded',
+      spawnRequests.length > 0 && spawnRequests[0].body.includes('move'),
+      JSON.stringify(spawnRequests[0]?.body ?? null),
+    ],
+    [
+      'the colony reported its room state',
+      colonyLogs.some((l) => l.includes('BOOTSTRAP')),
+      colonyLogs.at(-1) ?? '(no room logs)',
+    ],
+  ];
+
+  if (colonyLogs.length > 0) out.log(`[smoke] last room log: ${colonyLogs.at(-1)}`);
+}
+
 // --- structural assertions --------------------------------------------------
 
 const mem = engine.memory();
@@ -174,9 +266,10 @@ const structuralChecks = [
   ],
 ];
 
-const checks = [...normalChecks, ...pressureChecks, ...structuralChecks];
+const checks = [...normalChecks, ...pressureChecks, ...colonyChecks, ...structuralChecks];
 
 out.log('');
+out.log('[smoke] all checks');
 for (const [name, ok, detail] of checks) {
   out.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : ` — ${detail}`}`);
 }
@@ -187,5 +280,9 @@ for (const line of engine.logs.slice(0, 4)) out.log(`        ${line}`);
 
 const failed = checks.filter(([, ok]) => !ok).length;
 out.log('');
-out.log(failed === 0 ? `[smoke] OK (${TICKS} ticks x 2 phases)` : `[smoke] ${failed} check(s) failed`);
+out.log(
+  failed === 0
+    ? `[smoke] OK (${TICKS} ticks x 2 phases${snapshot ? ' + colony replay' : ''})`
+    : `[smoke] ${failed} check(s) failed`,
+);
 process.exit(failed === 0 ? 0 : 1);

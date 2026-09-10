@@ -18,7 +18,9 @@
  * Phase bodies land in M2+. What is fixed here is the ordering, the budget
  * arithmetic, the failure isolation, and the per-phase profiling.
  */
-import { record } from './errors';
+import { ownedRooms, viewRoom } from '../game/view';
+import { tickRoom } from '../colony/room';
+import { guard, record } from './errors';
 import { log, flushLogSummary } from './log';
 import { initMemory, gcDeadCreeps } from './memory';
 import { maybeReportProfile, profilePhase } from './profiler';
@@ -112,12 +114,15 @@ export function kernelTick(): void {
 }
 
 /**
- * Phase bodies land in M2+. Kept as an explicit switch so the pipeline order is
- * visible in one place and adding a phase is a compile error until it is
- * handled.
+ * Phase bodies. Kept as an explicit switch so the pipeline order is visible in
+ * one place and adding a phase is a compile error until it is handled.
  */
 function runPhase(phase: Phase): void {
   switch (phase) {
+    case 'execute':
+      tickColony();
+      return;
+
     case 'cleanup':
       // Memory first: reclaiming dead creeps' entries shrinks what the stats
       // write has to serialize, and both happen in this phase.
@@ -125,12 +130,48 @@ function runPhase(phase: Phase): void {
       maybeWriteStats();
       return;
 
+    // These phases exist in the pipeline but have no work yet:
+    //   prefetch — per-tick Game snapshot, once the view is cached rather than
+    //              rebuilt per consumer.
+    //   intel    — neighbouring-room scouting (M4).
+    //   plan/spawn/assign — currently inside `tickColony`, which runs them in
+    //              the required order. Splitting them out is M2 follow-up work;
+    //              keeping them here would mean two places deciding the order.
     case 'prefetch':
     case 'intel':
     case 'plan':
     case 'spawn':
     case 'assign':
-    case 'execute':
       return;
+  }
+}
+
+/**
+ * Run every owned room for this tick.
+ *
+ * Rooms are processed in name order so behaviour is reproducible: two rooms
+ * competing for the same spawn queue or the same recorded snapshot must resolve
+ * the same way every run.
+ */
+function tickColony(): void {
+  const rooms = ownedRooms();
+  if (rooms.length === 0) return;
+
+  // Built once per tick and shared: a creep standing in room A is part of room
+  // B's population only if it is actually there, so each view filters the same
+  // list rather than each room re-walking `Game.creeps`.
+  const creeps = Object.values(Game.creeps);
+
+  for (const room of rooms.slice().sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    const result = guard(() => tickRoom(viewRoom(room, creeps)), `room ${room.name}`);
+    if (!result) continue;
+
+    // The room name is in the message, not just the throttle signature: with
+    // several rooms this line is otherwise unattributable in the console.
+    log(
+      'info',
+      `room:${room.name}`,
+      `${room.name} ${result.state} intents=${String(result.tally.attempted)} ok=${String(result.tally.succeeded)} deferred=${String(result.tally.deferred)} reaped=${String(result.reaped)} spawn=${result.spawnReason}`,
+    );
   }
 }
