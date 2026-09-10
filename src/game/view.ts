@@ -169,7 +169,6 @@ function viewCreep(creep: Creep): CreepView {
     x: creep.pos.x,
     y: creep.pos.y,
     room: creep.pos.roomName,
-    ticksToLive: creep.ticksToLive ?? 1500,
     energy: creep.store.getUsedCapacity(RESOURCE_ENERGY),
     carryCapacity: creep.store.getCapacity(RESOURCE_ENERGY),
     parts,

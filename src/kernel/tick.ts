@@ -172,7 +172,7 @@ function tickColony(): void {
     log(
       'info',
       `room:${room.name}`,
-      `${room.name} ${result.state} creeps=${String(result.population)} intents=${String(result.tally.attempted)} ok=${String(result.tally.succeeded)} deferred=${String(result.tally.deferred)} reaped=${String(result.reaped)} pruned=${String(result.pruned)} spawn=${result.spawnReason}`,
+      `${room.name} ${result.state} creeps=${String(result.population)} intents=${String(result.tally.attempted)} ok=${String(result.tally.succeeded)} deferred=${String(result.tally.deferred)} noRoute=${String(result.tally.noRoute)} reaped=${String(result.reaped)} pruned=${String(result.pruned)} spawn=${result.spawnReason}`,
     );
   }
 }

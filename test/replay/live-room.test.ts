@@ -42,7 +42,6 @@ function creepAt(name: string, role: string, x: number, y: number, room: string)
     x,
     y,
     room,
-    ticksToLive: 1500,
     energy: 0,
     carryCapacity: 50,
     parts: { work: 1, carry: 1, move: 1 },
@@ -154,6 +153,58 @@ describe('demand against the real room', () => {
     expect(harvesters?.count).toBe(established.sources.length);
   });
 
+  it('wants a second upgrader once the room is energy-saturated', () => {
+    // Measured live: the spawn pinned at 300/300 while controller progress sat
+    // unchanged. At RCL 1 the controller is the only sink, so a full spawn is
+    // dead capital — converting it into controller progress is the one thing
+    // that unlocks everything else, and a second upgrader is nearly free when
+    // the energy is already banked.
+    const view = toRoomView(snapshot);
+    const state = deriveState(view).state;
+    const withSpawnAt = (energy: number) => ({
+      ...view,
+      spawns: view.spawns.map((s) => ({ ...s, energy })),
+    });
+
+    // Energy still scarce (the spawn has been drained by spawning): one upgrader.
+    const scarce = roleDemand(withSpawnAt(0), state).find((d) => d.role === 'upgrader');
+    expect(scarce?.count).toBe(1);
+    expect(scarce?.reason).not.toMatch(/surplus/);
+
+    // Spawn full: the surplus is now worth converting, so a second upgrader.
+    const rich = roleDemand(withSpawnAt(view.spawns[0]?.energyCapacityAvailable ?? 300), state)
+      .find((d) => d.role === 'upgrader');
+    expect(rich?.count).toBe(2);
+    expect(rich?.reason).toMatch(/surplus/);
+  });
+
+  it('does not add surplus upgraders past BOOTSTRAP, where extensions absorb it', () => {
+    // Beyond BOOTSTRAP the extra energy has somewhere to go, so a second
+    // upgrader is no longer free and the base quota applies.
+    const view = toRoomView(snapshot);
+    const established = {
+      ...view,
+      controller: view.controller ? { ...view.controller, level: 3 } : null,
+      stores: [
+        ...view.stores,
+        {
+          id: 'cont1',
+          type: 'container' as const,
+          x: 24,
+          y: 6,
+          room: view.name,
+          energy: 0,
+          energyCapacity: 2000,
+        },
+      ],
+      spawns: view.spawns.map((s) => ({ ...s, energy: s.energyCapacityAvailable })),
+    };
+
+    const state = deriveState(established).state;
+    expect(state).toBe('ESTABLISHED');
+    expect(roleDemand(established, state).find((d) => d.role === 'upgrader')?.count).toBe(1);
+  });
+
   it('wants no builders when the room has no construction sites', () => {
     // Spawning a builder against an empty site list is pure waste, and the real
     // room is a valid test of that because it genuinely has none.
@@ -222,14 +273,16 @@ describe('intent sequence on the real room', () => {
     const target = intents[0];
 
     expect(target).toBeDefined();
-    // Either harvesting an adjacent source, or moving toward one — both are
+    // Either harvesting an adjacent source, or approaching one — both are
     // correct depending on the real distance.
-    expect(['harvest', 'moveTo']).toContain(target?.kind);
+    expect(['harvest', 'approach']).toContain(target?.kind);
 
     const view = toRoomView(snapshot);
-    if (target?.kind === 'moveTo') {
-      const isSourcePosition = view.sources.some((s) => s.x === target.x && s.y === target.y);
-      expect(isSourcePosition).toBe(true);
+    if (target?.kind === 'approach') {
+      // The approach names a real source and the range the action needs, which
+      // is what lets the engine path to a reachable tile beside it.
+      expect(view.sources.some((s) => s.id === target.targetId)).toBe(true);
+      expect(target.range).toBe(1);
     }
   });
 
@@ -242,7 +295,7 @@ describe('intent sequence on the real room', () => {
     const intents = replayOneTick([loaded]);
     const kinds = intents.map((i) => i.kind);
 
-    expect(kinds.some((k) => k === 'transfer' || k === 'moveTo')).toBe(true);
+    expect(kinds.some((k) => k === 'transfer' || k === 'approach')).toBe(true);
   });
 
   it('produces the same intent sequence on a repeated replay', () => {

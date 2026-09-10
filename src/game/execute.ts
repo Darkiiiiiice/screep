@@ -57,6 +57,16 @@ const STALE: ReadonlySet<number> = new Set([
 ]);
 
 /**
+ * No route to the target.
+ *
+ * Its own bucket because it is transient by nature — the usual cause is other
+ * creeps occupying a corridor, not a permanent obstruction — yet it is worth
+ * surfacing separately from a genuine failure, since a persistent ERR_NO_PATH
+ * means a creep is stranded and that is a real problem.
+ */
+const NO_ROUTE = -2;
+
+/**
  * Run one intent.
  *
  * Returns the engine's result code. The type is `number` rather than
@@ -74,14 +84,23 @@ export function execute(intent: Intent): number {
   const creep = Game.creeps[intent.creep];
   if (!creep) return ERR_INVALID_ARGS;
 
-  // Movement needs no target object, and `targetId` does not exist on this
-  // intent, so it is resolved before the shared target lookup.
-  if (intent.kind === 'moveTo') {
-    return creep.moveTo(intent.x, intent.y, { reusePath: 20 });
-  }
-
   const target = Game.getObjectById(intent.targetId);
   if (!target) return ERR_INVALID_ARGS;
+
+  // `range` lets the pathfinder pick a reachable tile next to a solid target.
+  // Handing it raw coordinates of a source or spawn produced ERR_NO_PATH — the
+  // creep was being sent into a tile it could never stand on.
+  if (intent.kind === 'approach') {
+    // ignoreCreeps: the pathfinder treats other creeps as obstacles by default,
+    // which in a wall-heavy room means two creeps in the same corridor give each
+    // other ERR_NO_PATH even though the target is plainly reachable. Collisions
+    // resolve on their own when the blocked creep waits a tick.
+    return creep.moveTo(target as unknown as RoomObject, {
+      range: intent.range,
+      reusePath: 20,
+      ignoreCreeps: true,
+    });
+  }
 
   switch (intent.kind) {
     case 'harvest':
@@ -115,12 +134,13 @@ function spawn(intent: Extract<Intent, { kind: 'spawn' }>): number {
 }
 
 /** Classify a result code, so a caller can count outcomes without knowing them. */
-export type Outcome = 'ok' | 'deferred' | 'stale' | 'failed';
+export type Outcome = 'ok' | 'deferred' | 'stale' | 'no-route' | 'failed';
 
 export function classify(code: number): Outcome {
   if (code === OK) return 'ok';
   if (BENIGN.has(code)) return 'deferred';
   if (STALE.has(code)) return 'stale';
+  if (code === NO_ROUTE) return 'no-route';
   return 'failed';
 }
 
@@ -138,12 +158,21 @@ export interface ExecutionTally {
   deferred: number;
   /** Premise gone: the task should be dropped. */
   stale: number;
+  /** No route right now; usually another creep in the way. */
+  noRoute: number;
   /** Unexpected; these are worth investigating. */
   failed: number;
 }
 
 export function executeAll(intents: Intent[]): ExecutionTally {
-  const tally: ExecutionTally = { attempted: 0, succeeded: 0, deferred: 0, stale: 0, failed: 0 };
+  const tally: ExecutionTally = {
+    attempted: 0,
+    succeeded: 0,
+    deferred: 0,
+    stale: 0,
+    noRoute: 0,
+    failed: 0,
+  };
 
   for (const intent of intents) {
     tally.attempted += 1;
@@ -152,9 +181,12 @@ export function executeAll(intents: Intent[]): ExecutionTally {
     if (outcome === 'ok') tally.succeeded += 1;
     else if (outcome === 'deferred') tally.deferred += 1;
     else if (outcome === 'stale') tally.stale += 1;
+    else if (outcome === 'no-route') tally.noRoute += 1;
     else {
       tally.failed += 1;
-      log('warn', `execute:${intent.kind}`, `${intent.kind} failed`);
+      // The code is the one datum that identifies the cause; without it the
+      // message says only that something went wrong, which is not actionable.
+      log('warn', `execute:${intent.kind}`, `${intent.kind} failed (code not classified)`);
     }
   }
 

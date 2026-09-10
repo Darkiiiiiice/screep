@@ -45,8 +45,6 @@ export interface CreepView {
   x: number;
   y: number;
   room: string;
-  /** Remaining ticks before the creep's body decays to nothing. */
-  ticksToLive: number;
   /** Energy carried right now. */
   energy: number;
   /** Total carry capacity, i.e. the upper bound on `energy`. */
@@ -168,7 +166,16 @@ export type Intent =
   | { kind: 'build'; creep: string; targetId: string }
   | { kind: 'repair'; creep: string; targetId: string }
   | { kind: 'upgrade'; creep: string; targetId: string }
-  | { kind: 'moveTo'; creep: string; x: number; y: number; room: string }
+  /**
+   * Move into `range` of a target.
+   *
+   * Deliberately names the target rather than a destination tile: sources,
+   * spawns and controllers all occupy solid tiles, so a creep told to move to
+   * their exact position gets ERR_NO_PATH. Naming the target and the desired
+   * range lets the engine path to the nearest reachable tile, which is what the
+   * action actually needs.
+   */
+  | { kind: 'approach'; creep: string; targetId: string; range: number }
   | { kind: 'pickup'; creep: string; targetId: string }
   | { kind: 'spawn'; room: string; spawn: string; body: BodyPart[]; name: string; role: string };
 

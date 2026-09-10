@@ -9,7 +9,6 @@ function creep(overrides: Partial<CreepView> = {}): CreepView {
     x: 10,
     y: 10,
     room: 'W1N1',
-    ticksToLive: 1500,
     energy: 0,
     carryCapacity: 50,
     parts: { work: 2, carry: 1, move: 1 },
@@ -94,11 +93,15 @@ describe('fill before travel', () => {
     expect(decide(creep({ energy: 0 }), null, view)).toBeNull();
   });
 
-  it('moves toward a source it is not adjacent to', () => {
+  it('approaches a source it is not adjacent to', () => {
+    // `approach` names the source rather than a destination tile: a source is
+    // solid, so a creep sent to its exact coordinates gets ERR_NO_PATH.
     const view = room();
     const intent = decide(creep({ x: 30, y: 30 }), null, view);
 
-    expect(intent?.kind).toBe('moveTo');
+    expect(intent?.kind).toBe('approach');
+    expect((intent as { targetId: string }).targetId).toBe('src1');
+    expect((intent as { range: number }).range).toBe(1);
   });
 
   it('harvests in place when adjacent to the source', () => {
@@ -141,6 +144,91 @@ describe('fill before travel', () => {
     expect(
       decide(creep({ role: 'builder', energy: 50, x: 30, y: 29 }), null, view)?.kind,
     ).toBe('build');
+  });
+});
+
+describe('act locally, travel only when necessary', () => {
+  // The measured bug: an upgrader reached the controller, spent 2 of its 50
+  // energy, decided it was "not full", and walked 19 tiles back to a source to
+  // top up. Controller progress sat still while three creeps commuted.
+  it('keeps upgrading while carrying energy, instead of topping up', () => {
+    const view = room();
+    // Standing on the controller with most of a load left.
+    const intent = decide(creep({ role: 'upgrader', energy: 48, x: 43, y: 16 }), null, view);
+
+    expect(intent?.kind).toBe('upgrade');
+    expect((intent as { targetId: string }).targetId).toBe('ctrl');
+  });
+
+  it('keeps upgrading even with a single energy left', () => {
+    // Spending the last unit is free — the creep must travel to refill either
+    // way, so interrupting to top up first only loses the unit.
+    const view = room();
+    const intent = decide(creep({ role: 'upgrader', energy: 1, x: 43, y: 16 }), null, view);
+
+    expect(intent?.kind).toBe('upgrade');
+  });
+
+  it('heads for the controller rather than topping up when the source is further away', () => {
+    // The distance comparison is what replaces a magic "full enough" threshold:
+    // a creep in the middle of the room must not walk past its destination.
+    const view = room({
+      sources: [source('src1', 24, 5)],
+      controller: {
+        id: 'ctrl',
+        x: 30,
+        y: 12,
+        level: 1,
+        my: true,
+        ticksToDowngrade: 20_000,
+        progress: 0,
+        progressTotal: 200,
+      },
+    });
+
+    // At (29,13): controller is 1 tile away, source is 9 away.
+    const intent = decide(creep({ role: 'upgrader', energy: 40, x: 29, y: 13 }), null, view);
+
+    expect(intent?.kind).toBe('upgrade');
+  });
+
+  it('does top up when the supply is the nearer of the two', () => {
+    const view = room({
+      controller: {
+        id: 'ctrl',
+        x: 43,
+        y: 17,
+        level: 1,
+        my: true,
+        ticksToDowngrade: 20_000,
+        progress: 0,
+        progressTotal: 200,
+      },
+    });
+
+    // At (24,6): adjacent to the source, 19 tiles from the controller.
+    const intent = decide(creep({ role: 'upgrader', energy: 1, x: 24, y: 6 }), null, view);
+
+    expect(intent?.kind).toBe('harvest');
+  });
+
+  it('delivers locally rather than carrying energy past a sink', () => {
+    const view = room();
+    // Adjacent to the spawn, carrying a partial load. Walking away to mine first
+    // would mean hauling it back later.
+    const intent = decide(creep({ energy: 12, x: 24, y: 11 }), null, view);
+
+    expect(intent?.kind).toBe('transfer');
+    expect((intent as { targetId: string }).targetId).toBe('spawn1');
+  });
+
+  it('still fills up before a long trip when it is at the source', () => {
+    // The complement of act-locally: away from any sink, mining more beats
+    // hauling a nearly empty carry across the room.
+    const view = room();
+    const intent = decide(creep({ energy: 4, x: 24, y: 6 }), null, view);
+
+    expect(intent?.kind).toBe('harvest');
   });
 });
 

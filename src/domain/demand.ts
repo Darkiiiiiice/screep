@@ -40,6 +40,34 @@ const BASE_QUOTA: Record<ColonyState, Partial<Record<Role, number>>> = {
 };
 
 /**
+ * How many upgraders the room should have.
+ *
+ * At BOOTSTRAP the controller is the ONLY sink: RCL 1 has no extensions and the
+ * spawn caps at 300, so once the spawn is full every further unit of energy has
+ * nowhere to go. Measured live: spawn pinned at 300/300 while controller progress
+ * sat unchanged — the colony was energy-rich and upgrade-poor, with a full spawn
+ * acting as dead capital.
+ *
+ * A second upgrader is nearly free in that state (the energy is already banked)
+ * and roughly doubles the rate at which it is converted into the one thing that
+ * unlocks everything else. So the count follows energy abundance: one upgrader
+ * while energy is scarce, two once the stores are full.
+ *
+ * Beyond BOOTSTRAP, extensions and (later) storage absorb the surplus, and the
+ * extra upgrader is no longer free — so the base quota applies.
+ */
+function upgraderCount(state: ColonyState, room: RoomView, base: number): number {
+  if (state !== 'BOOTSTRAP') return base;
+
+  // Only the spawn stores energy at this tier.
+  const spawns = room.spawns;
+  if (spawns.length === 0) return base;
+
+  const saturated = spawns.every((s) => s.energy >= s.energyCapacityAvailable);
+  return saturated ? Math.max(base, 2) : base;
+}
+
+/**
  * Compute role demand for a room.
  *
  * @param room  the room's snapshot
@@ -76,10 +104,14 @@ export function roleDemand(room: RoomView, state: ColonyState): RoleDemand[] {
   }
 
   if (base.upgrader) {
+    const count = upgraderCount(state, room, base.upgrader);
     demands.push({
       role: 'upgrader',
-      count: base.upgrader,
-      reason: 'controller progress + downgrade timer',
+      count,
+      reason:
+        count > base.upgrader
+          ? `controller progress + downgrade timer (surplus energy: ${String(count)})`
+          : 'controller progress + downgrade timer',
     });
   }
 
@@ -91,12 +123,16 @@ export function roleDemand(room: RoomView, state: ColonyState): RoleDemand[] {
     reason: siteCount > 0 ? `${String(siteCount)} site(s)` : 'no sites',
   });
 
-  // A defender appears only in response to an actual hostile.
-  demands.push({
-    role: 'defender',
-    count: room.hostiles.length > 0 ? 1 : 0,
-    reason: room.hostiles.length > 0 ? `${String(room.hostiles.length)} hostile(s)` : 'no hostiles',
-  });
+  // No defender is requested. Observed live: a transient hostile caused one to
+  // be spawned, and it then stood idle forever — `decide()` has no defender
+  // behaviour, so the role had no way to act. Spending 300 energy and a spawn
+  // slot on a creep that cannot do anything is worse than not spawning it, so
+  // the demand stays at zero until combat is designed (M5).
+  //
+  // Note the standing risk this leaves: were a hostile to arrive now, nothing
+  // in the colony reacts to it. At RCL 1 that is unavoidable — there are no
+  // towers and a 2-ATTACK creep cannot kill an invader — so the honest position
+  // is that early-game defence is "none", not "a defender that idles".
 
   return demands;
 }
@@ -107,7 +143,7 @@ export function roleDemand(room: RoomView, state: ColonyState): RoleDemand[] {
  * Ordering is the spawn priority: replacing a harvester matters more than
  * adding an upgrader, because without income nothing else progresses.
  */
-const SPAWN_PRIORITY: Role[] = ['harvester', 'defender', 'hauler', 'upgrader', 'builder'];
+const SPAWN_PRIORITY: Role[] = ['harvester', 'hauler', 'upgrader', 'builder'];
 
 export interface RoleShortfall {
   role: Role;

@@ -2,15 +2,91 @@ import { describe, expect, it } from 'vitest';
 import { bodyCost, countPart, designBody, designForRole, ROLE_RATIO } from '@/domain/body';
 import type { Body, BodyPart } from '@/domain/types';
 
+/**
+ * Smallest body whose MOVE keeps pace with its other parts.
+ *
+ * Mirrors the engine's fatigue rule (each MOVE cancels 2, each other part adds
+ * 2) so the tests can compute the affordability threshold rather than hardcode
+ * it.
+ */
+function expandBalanced(ratio: Partial<Record<BodyPart, number>>): Body {
+  const body: Body = [];
+  let nonMove = 0;
+  for (const part of Object.keys(ratio) as BodyPart[]) {
+    if (part === 'move') continue;
+    for (let i = 0; i < (ratio[part] ?? 0); i += 1) {
+      body.push(part);
+      nonMove += 1;
+    }
+  }
+  const move = Math.max(ratio.move ?? 0, nonMove);
+  for (let i = 0; i < move; i += 1) body.push('move');
+  return body;
+}
+
 describe('designBody', () => {
-  it('buys a whole number of blocks and spends the remainder on single parts', () => {
-    // One {work,carry,move} block is 200. With 300 the colony gets a block plus
-    // 100 left, which is exactly one more WORK — the most valuable part for a
-    // harvester, since WORK is what sets harvest rate.
+  it('buys whole blocks only, preserving the requested shape', () => {
+    // A {work, carry, move:2} block is 250. With 300 there is room for one block
+    // and 50 change — not enough for a second, so the change is left unspent.
+    // Spending it on a loose part would break the shape, and the shape IS the
+    // movement balance.
+    const one = designBody(300, { work: 1, carry: 1, move: 2 });
+    expect(bodyCost(one as Body)).toBe(250);
+
+    const two = designBody(500, { work: 1, carry: 1, move: 2 });
+    expect(bodyCost(two as Body)).toBe(500);
+    expect(countPart(two as Body, 'work')).toBe(2);
+  });
+
+  it('corrects a ratio that could not move at full speed', () => {
+    // {1 work, 1 carry, 1 move} has 2 non-MOVE parts and 1 MOVE, so it would
+    // crawl at 2 ticks/tile. The designer raises MOVE to match rather than
+    // building a body it knows will be slow.
     const body = designBody(300, { work: 1, carry: 1, move: 1 });
     expect(body).not.toBeNull();
-    expect(bodyCost(body as Body)).toBe(300);
-    expect(countPart(body as Body, 'work')).toBe(2);
+
+    const nonMove = (body as Body).filter((p) => p !== 'move').length;
+    expect(countPart(body as Body, 'move')).toBeGreaterThanOrEqual(nonMove);
+    expect(bodyCost(body as Body)).toBe(250);
+  });
+
+  it('keeps MOVE at parity with the other parts whenever the budget allows', () => {
+    // The bug this pins: buying the remainder part-by-part produced bodies like
+    // 4 carry + 2 move. A creep moves one tile per tick only while
+    // MOVE >= non-MOVE (each MOVE cancels 2 fatigue, each other part adds 2), so
+    // that body moved at 3 ticks/tile — measured live as an upgrader spending
+    // half its life walking.
+    const ratios = [
+      { work: 1, carry: 1, move: 2 },
+      { carry: 1, move: 1 },
+      { attack: 1, move: 1 },
+    ];
+
+    for (const ratio of ratios) {
+      const minimal = bodyCost(expandBalanced(ratio));
+      for (const budget of [minimal, 400, 550, 1000, 2400]) {
+        const body = designBody(budget, ratio);
+        expect(body, `${JSON.stringify(ratio)} @ ${String(budget)}`).not.toBeNull();
+
+        const nonMove = (body as Body).filter((p) => p !== 'move').length;
+        const move = countPart(body as Body, 'move');
+        const label = `${JSON.stringify(ratio)} @ ${String(budget)}`;
+        expect(move, `${label}: ${String(nonMove)} non-MOVE vs ${String(move)} MOVE`).toBeGreaterThanOrEqual(nonMove);
+      }
+    }
+  });
+
+  it('builds a slow creep rather than none when the fast one is unaffordable', () => {
+    // Movement balance is a preference, not a hard requirement. Refusing here
+    // would deadlock the worst case: a room whose harvester just died with less
+    // banked energy than the balanced replacement costs has no income, so it
+    // could never afford to recover.
+    const body = designBody(200, { work: 1, carry: 1, move: 2 });
+
+    expect(body).not.toBeNull();
+    expect(bodyCost(body as Body)).toBeLessThanOrEqual(200);
+    expect(countPart(body as Body, 'work')).toBeGreaterThan(0);
+    expect(countPart(body as Body, 'move')).toBeGreaterThan(0);
   });
 
   it('never exceeds the budget', () => {
@@ -34,10 +110,10 @@ describe('designBody', () => {
 
   it('uses the full requested shape when the budget allows it', () => {
     // Downscaling must only happen when forced, never as a shortcut.
-    const body = designBody(300, { work: 2, carry: 1, move: 1 });
+    const body = designBody(600, { work: 2, carry: 1, move: 3 });
     expect(body).not.toBeNull();
     expect(countPart(body as Body, 'work')).toBe(2);
-    expect(bodyCost(body as Body)).toBe(300);
+    expect(bodyCost(body as Body)).toBe(400);
   });
 
   it('returns null rather than a crippled body when even one part each is unaffordable', () => {
@@ -77,11 +153,16 @@ describe('designBody', () => {
 });
 
 describe('role bodies', () => {
-  it('gives every role a body with MOVE, so none is immobile', () => {
+  it('gives every role a body that can move at full speed', () => {
+    // A slow body is the failure mode that is invisible in unit terms and
+    // expensive in practice, so every role is held to the 1-tick-per-tile bar.
     for (const role of Object.keys(ROLE_RATIO)) {
-      const body = designForRole(role, 300);
+      const body = designForRole(role, 600);
       expect(body, role).not.toBeNull();
-      expect(countPart(body as Body, 'move'), role).toBeGreaterThan(0);
+
+      const nonMove = (body as Body).filter((p) => p !== 'move').length;
+      const move = countPart(body as Body, 'move');
+      expect(move, `${role}: ${String(nonMove)} non-MOVE vs ${String(move)} MOVE`).toBeGreaterThanOrEqual(nonMove);
     }
   });
 

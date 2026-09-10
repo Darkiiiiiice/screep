@@ -65,10 +65,20 @@ function expand(ratio: BodyRatio, blocks: number, extra: BodyRatio = {}): Body {
  * Dividing every count by `divisor` (never below 1) preserves the shape while
  * reducing cost, and keeps MOVE present at every step.
  */
-function shrink(ratio: BodyRatio, divisor: number): BodyRatio {
+function shrink(ratio: BodyRatio, divisor: number, requireBalanced: boolean): BodyRatio {
   const out: BodyRatio = {};
   for (const part of Object.keys(ratio) as BodyPart[]) {
     out[part] = Math.max(1, Math.floor((ratio[part] ?? 0) / divisor));
+  }
+
+  // Shrinking can tip the MOVE balance — {1,1,2} at divisor 2 becomes {1,1,1},
+  // which moves at 2 ticks/tile. Movement is not a cosmetic property of the
+  // body, so the balance is restored rather than lost.
+  if (requireBalanced) {
+    const nonMove = (Object.keys(out) as BodyPart[])
+      .filter((p) => p !== 'move')
+      .reduce((sum, p) => sum + (out[p] ?? 0), 0);
+    if ((out.move ?? 0) < nonMove) out.move = nonMove;
   }
   return out;
 }
@@ -80,11 +90,15 @@ function shrink(ratio: BodyRatio, divisor: number): BodyRatio {
  * @returns the effective ratio and how many copies of it fit, or null when even
  *   the minimal shape is unaffordable.
  */
-function fitRatio(budget: number, ratio: BodyRatio): { ratio: BodyRatio; blocks: number } | null {
+function tryDivisors(
+  budget: number,
+  ratio: BodyRatio,
+  requireBalanced: boolean,
+): { ratio: BodyRatio; blocks: number } | null {
   const maxDivisor = Math.max(...Object.values(ratio).map((n) => n ?? 0));
 
   for (let divisor = 1; divisor <= maxDivisor; divisor += 1) {
-    const candidate = shrink(ratio, divisor);
+    const candidate = shrink(ratio, divisor, requireBalanced);
     const cost = bodyCost(expand(candidate, 1));
     if (cost > budget) continue;
 
@@ -94,6 +108,21 @@ function fitRatio(budget: number, ratio: BodyRatio): { ratio: BodyRatio; blocks:
   }
 
   return null;
+}
+
+/**
+ * Find the largest shape that fits the budget.
+ *
+ * Movement-balanced shapes are preferred, because a slow creep loses more to
+ * travel than it saved in energy. But they are a preference, not a hard
+ * requirement: refusing to build an unbalanced body when the balanced one is
+ * unaffordable would deadlock the colony in the one case that matters most —
+ * a room whose harvester just died with slightly less banked energy than the
+ * ideal replacement costs has no income, so it could never afford the upgrade.
+ * A slow creep is strictly better than a stuck colony.
+ */
+function fitRatio(budget: number, ratio: BodyRatio): { ratio: BodyRatio; blocks: number } | null {
+  return tryDivisors(budget, ratio, true) ?? tryDivisors(budget, ratio, false);
 }
 
 /**
@@ -120,33 +149,20 @@ export function designBody(budget: number, ratio: BodyRatio): Body | null {
   const blockCost = bodyCost(expand(effective, 1));
   const blockParts = Object.values(effective).reduce<number>((a, b) => a + (b ?? 0), 0);
 
-  // Spend the remainder on single parts, in descending ratio order so the
-  // result stays closest to the requested shape.
-  const priority = (Object.keys(effective) as BodyPart[]).sort(
-    (a, b) => (effective[b] ?? 0) - (effective[a] ?? 0),
-  );
-
+  // Spend the remainder on WHOLE ratio blocks only.
+  //
+  // An earlier version bought single parts greedily, which quietly broke the
+  // body's movement: a 2:2:2 design with 250 spare became 4 carry + 2 move,
+  // which moves at 3 ticks/tile instead of 1. The shape of the ratio is not
+  // cosmetic — it IS the move/fatigue balance — so it has to be preserved.
+  let total = blocks;
   let remaining = budget - blocks * blockCost;
-  let partsUsed = blocks * blockParts;
-  const extra: BodyRatio = {};
-
-  // Loop because a cheap ratio under a large budget leaves more than one block's
-  // worth of change.
-  let progressed = true;
-  while (progressed) {
-    progressed = false;
-    for (const part of priority) {
-      const cost = PART_COST[part] ?? Infinity;
-      if (partsUsed + 1 > MAX_PARTS) break;
-      if (cost > remaining) continue;
-      extra[part] = (extra[part] ?? 0) + 1;
-      remaining -= cost;
-      partsUsed += 1;
-      progressed = true;
-    }
+  while (blockParts > 0 && total * blockParts + blockParts <= MAX_PARTS && blockCost <= remaining) {
+    remaining -= blockCost;
+    total += 1;
   }
 
-  return expand(effective, blocks, extra);
+  return expand(effective, total);
 }
 
 /** Count how many of a part a body contains. */
@@ -159,23 +175,29 @@ export function countPart(body: Body, part: BodyPart): number {
 /**
  * The canonical body shapes per role.
  *
- * Chosen against the two constraints that actually bite early:
- *   - HARVEST rate is 2 energy/tick per WORK part, so WORK is what shortens the
- *     time to fill CARRY; a 1:1 WORK:CARRY ratio means 25 ticks to fill.
- *   - MOVE must keep pace with CARRY or the creep crawls; one MOVE per CARRY
- *     part is the cheap safe ratio on plain terrain.
+ * The MOVE count is the part that is easy to get wrong and expensive to get
+ * wrong. A creep moves one tile per tick only while `MOVE >= non-MOVE`: each
+ * MOVE part cancels 2 fatigue and each other part adds 2, so a body that is
+ * heavy relative to its MOVE parts moves at `ceil(nonMove / move)` ticks per
+ * tile. Measured consequence in the live room: an upgrader with
+ * `{1 work, 1 carry, 1 move}` walked its 19-tile trip at 2 ticks/tile — 76 of
+ * its 151-tick round trip was walking.
  *
- * `upgrader` and `builder` are pure energy consumers, so they carry more than
- * they harvest and skip WORK entirely — they deliver what a harvester fills.
+ * MOVE costs 50, the cheapest part, and every extra one multiplies throughput by
+ * cutting travel. So each ratio keeps `move == nonMove`, i.e. full speed.
+ *
+ * WORK sets harvest rate (2 energy/tick per part) and upgrade rate (1/tick), so
+ * it is what makes a body faster at its job once travel is no longer dominant.
+ * Scaling that up is the job of the budget, not of the ratio.
  */
 export const ROLE_RATIO: Record<string, BodyRatio> = {
-  // Self-harvests and delivers: needs WORK to mine, CARRY to hold, MOVE to travel.
-  harvester: { work: 2, carry: 1, move: 1 },
+  // Self-harvests and delivers: WORK to mine, CARRY to hold, MOVE to travel.
+  harvester: { work: 1, carry: 1, move: 2 },
   // Carries from container to consumer; no WORK at all.
-  hauler: { carry: 2, move: 1 },
+  hauler: { carry: 1, move: 1 },
   // Spends energy on the controller; no WORK, no harvesting.
-  upgrader: { work: 1, carry: 1, move: 1 },
-  builder: { work: 1, carry: 1, move: 1 },
+  upgrader: { work: 1, carry: 1, move: 2 },
+  builder: { work: 1, carry: 1, move: 2 },
   // Combat parts are expensive; keep the first responder small and fast.
   defender: { attack: 1, move: 1 },
 };
