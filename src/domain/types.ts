@@ -164,7 +164,6 @@ export type Intent =
   | { kind: 'transfer'; creep: string; targetId: string; amount: number | undefined }
   | { kind: 'withdraw'; creep: string; targetId: string; amount: number | undefined }
   | { kind: 'build'; creep: string; targetId: string }
-  | { kind: 'repair'; creep: string; targetId: string }
   | { kind: 'upgrade'; creep: string; targetId: string }
   /**
    * Move into `range` of a target.
@@ -176,7 +175,6 @@ export type Intent =
    * action actually needs.
    */
   | { kind: 'approach'; creep: string; targetId: string; range: number }
-  | { kind: 'pickup'; creep: string; targetId: string }
   | { kind: 'spawn'; room: string; spawn: string; body: BodyPart[]; name: string; role: string };
 
 /** Role names. String literals rather than an enum so they survive `JSON`. */

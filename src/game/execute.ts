@@ -134,12 +134,8 @@ export function execute(intent: Intent): number {
       return creep.withdraw(target as AnyStoreStructure, RESOURCE_ENERGY, intent.amount);
     case 'build':
       return creep.build(target as ConstructionSite);
-    case 'repair':
-      return creep.repair(target as Structure);
     case 'upgrade':
       return creep.upgradeController(target as StructureController);
-    case 'pickup':
-      return creep.pickup(target as Resource);
   }
 }
 

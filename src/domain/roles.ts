@@ -28,9 +28,7 @@ const REACH: Record<string, number> = {
   harvest: 1,
   transfer: 1,
   withdraw: 1,
-  pickup: 1,
   build: 3,
-  repair: 3,
   upgrade: 3,
 };
 
@@ -49,7 +47,7 @@ interface Positioned extends Coords {
   id: string;
 }
 
-type ActionKind = 'harvest' | 'transfer' | 'withdraw' | 'pickup' | 'build' | 'repair' | 'upgrade';
+type ActionKind = 'harvest' | 'transfer' | 'withdraw' | 'build' | 'upgrade';
 
 /** True when the creep could act on this target without moving. */
 function inReach(creep: CreepView, target: Coords, kind: ActionKind): boolean {
@@ -74,9 +72,7 @@ function actOrApproach(creep: CreepView, target: Positioned, kind: ActionKind, a
     case 'withdraw':
       return { kind, creep: creep.name, targetId: target.id, amount };
     case 'harvest':
-    case 'pickup':
     case 'build':
-    case 'repair':
     case 'upgrade':
       return { kind, creep: creep.name, targetId: target.id };
   }
@@ -88,14 +84,13 @@ function actOrApproach(creep: CreepView, target: Positioned, kind: ActionKind, a
  * Used where the caller has already established reach. Distinct from
  * `actOrApproach` so the reach check never has to be faked.
  */
-function act(creep: CreepView, target: Positioned, kind: Exclude<ActionKind, 'pickup'>): Intent {
+function act(creep: CreepView, target: Positioned, kind: ActionKind): Intent {
   switch (kind) {
     case 'transfer':
     case 'withdraw':
       return { kind, creep: creep.name, targetId: target.id, amount: undefined };
     case 'harvest':
     case 'build':
-    case 'repair':
     case 'upgrade':
       return { kind, creep: creep.name, targetId: target.id };
   }

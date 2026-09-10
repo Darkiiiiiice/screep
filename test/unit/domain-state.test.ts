@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { atLeast, deriveState, energyToReach, UPGRADE_COST } from '@/domain/state';
+import { deriveState, energyToReach, UPGRADE_COST } from '@/domain/state';
 import type { RoomView, StoreView } from '@/domain/types';
 
 function store(type: string): StoreView {
@@ -69,14 +69,6 @@ describe('deriveState', () => {
     expect(deriveState(room({ level: 6, stores: [store('container')] })).reason).toMatch(
       /no terminal/,
     );
-  });
-});
-
-describe('atLeast', () => {
-  it('compares states by their tier, not alphabetically', () => {
-    expect(atLeast('ESTABLISHED', 'BOOTSTRAP')).toBe(true);
-    expect(atLeast('BOOTSTRAP', 'ESTABLISHED')).toBe(false);
-    expect(atLeast('MATURE', 'MATURE')).toBe(true);
   });
 });
 

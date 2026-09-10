@@ -17,7 +17,7 @@
 import type { Role } from './types';
 
 /** What kind of work a task represents. */
-export type TaskKind = 'harvest' | 'deliver' | 'upgrade' | 'build' | 'pickup' | 'repair';
+export type TaskKind = 'harvest' | 'deliver' | 'upgrade' | 'build';
 
 export interface Task {
   id: string;
@@ -108,20 +108,6 @@ export function addTask(board: TaskBoard, spec: TaskSpec, now: number): Task {
   board.nextId += 1;
   board.tasks[task.id] = task;
   return task;
-}
-
-/** Drop a task, e.g. because its target ceased to exist or the work is done. */
-export function completeTask(board: TaskBoard, id: string): void {
-  delete board.tasks[id];
-}
-
-/** Return a creep's lease to the pool, leaving the task itself in place. */
-export function releaseTask(board: TaskBoard, creepName: string): void {
-  for (const task of Object.values(board.tasks)) {
-    if (task.leasedBy !== creepName) continue;
-    task.leasedBy = null;
-    task.leasedUntil = 0;
-  }
 }
 
 export interface LeaseOptions {

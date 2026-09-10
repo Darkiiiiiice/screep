@@ -2,12 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   addTask,
   boardSummary,
-  completeTask,
   DEFAULT_LEASE_TICKS,
   dropTasksForMissingTargets,
   emptyBoard,
   leaseTask,
-  releaseTask,
   reapExpired,
   taskKey,
 } from '@/domain/tasks';
@@ -238,25 +236,6 @@ describe('lease recovery', () => {
     expect(reapExpired(board, 1 + DEFAULT_LEASE_TICKS + 1, { Bob: true })).toBe(1);
   });
 
-  it('returns a lease to the pool on explicit release', () => {
-    const board = emptyBoard();
-    const task = addTask(board, spec('src1'), 1);
-    leaseTask(board, 'Bob', {}, 1);
-
-    releaseTask(board, 'Bob');
-    expect(board.tasks[task.id]?.leasedBy).toBeNull();
-  });
-
-  it('does not affect other creeps when releasing one', () => {
-    const board = emptyBoard();
-    addTask(board, spec('src1'), 1);
-    addTask(board, spec('src2'), 1);
-    leaseTask(board, 'Bob', {}, 1);
-    leaseTask(board, 'Alice', {}, 1);
-
-    releaseTask(board, 'Bob');
-    expect(boardSummary(board).leased).toBe(1);
-  });
 });
 
 describe('target validity', () => {
@@ -279,22 +258,3 @@ describe('target validity', () => {
   });
 });
 
-describe('completion', () => {
-  it('removes a finished task from the board', () => {
-    const board = emptyBoard();
-    const task = addTask(board, spec('src1'), 1);
-    completeTask(board, task.id);
-    expect(boardSummary(board).total).toBe(0);
-  });
-
-  it('frees the creep to lease something else', () => {
-    const board = emptyBoard();
-    const first = addTask(board, spec('src1'), 1);
-    addTask(board, spec('src2'), 1);
-
-    leaseTask(board, 'Bob', {}, 1);
-    completeTask(board, first.id);
-
-    expect(leaseTask(board, 'Bob', {}, 1)?.targetId).toBe('src2');
-  });
-});

@@ -85,11 +85,6 @@ export function deriveState(room: RoomView): StateVerdict {
   return { state: 'BOOTSTRAP', reason: `RCL ${String(level)}` };
 }
 
-/** True when the state is at or beyond `threshold`, for tiered decisions. */
-export function atLeast(state: ColonyState, threshold: ColonyState): boolean {
-  return MIN_LEVEL[state] >= MIN_LEVEL[threshold];
-}
-
 /**
  * The next controller level's energy cost, per the official table.
  *
