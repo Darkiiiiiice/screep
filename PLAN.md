@@ -286,10 +286,23 @@ flowchart LR
 |---|---|---|---|
 | **M0 基础设施** ✅ | — | 仓库骨架、构建/类型检查/单测/部署/观测命令、token 连通性与 shard 自动识别 | **已达成**：`typecheck`/`lint`/`test`(8 passed)/`build` 全绿；`whoami` 自动识别 shard3 与 CPU 20；守卫规则经反例测试确认会拦截违规。`deploy`/`watch`/`stats` 均已实测（部署 1/240、console 流、段读取）|
 | **M1 内核骨架** ✅ | — | tick 管线、CPU 预算与降级、cache/heap/memory/stats/log/errors/profiler | **已达成**：54 单测通过；`npm run smoke` 跑真实产物 200 tick × 2 相（常规 + CPU 高压），9 项断言全过——含**降级确实触发**与**关键阶段从不被跳过**；Memory 迁移幂等；stats 段写入且有界 |
-| **M2 任务系统 + 角色** | — | 任务注册表与租约、角色行为表、**状态机骨架（先只实现 `BOOTSTRAP`）**、spawn manager | 轨道 A 覆盖任务全生命周期；轨道 B 回放线上快照能产出正确命令序列；线上 creep 完成 harvest → deliver 全链，死亡后自动补员 |
+| **M2 任务系统 + 角色** ✅ | — | 任务注册表与租约、角色行为表、状态机、spawn manager | **已达成**：任务租约全生命周期单测覆盖；真实房间 W34S1 回放断言意图序列；**线上实测闭环**：harvester 采满 → 交付 spawn → upgrader 出生 → 控制器进度开始增长（`prog 2→3`）。⚠️ **creep 死亡后的自动补员尚未实测**（需等 1500 tick 寿命到期） |
 | **M3 `BOOTSTRAP`→`ESTABLISHED`** | RCL 1–5 | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应、状态迁移判定 | **连续 2000 tick 无 creep 断档**（按线上实际 tick 时长折算约数小时，需实测标定）；RCL **1→5**（累计 585,200 能量）；CPU 峰值 < 20；Memory 波动 < 5% |
 | **M4 `MATURE`** | RCL 6–7 | link 链路、专用 miner、物流分层、**届时再设计** | RCL 6+；link 生效后 CPU 不升反降 |
 | **M5+ 扩张与对抗** | RCL 8 | claim、远程开采、防御、Power Creeps —— **细节刻意不在此规划** | — |
+
+### 5.1 线上实测基线（2026-09-10，shard3）
+
+| 指标 | 实测值 | 说明 |
+|---|---|---|
+| **tick 速率** | **约 4 秒/tick** | 与 `gameShardsInfo.lastTicks`（3521–4428ms）吻合。**这是所有时间预估的基础** |
+| 房间 | `W34S1`，controller(43,17)，spawn(24,10)，2 sources，62 walls | — |
+| 移速 | 约 2 tick/格 | `nonmove/move = 2/1`，与体力公式一致 |
+| RCL 1→2 预估 | 约 580 tick ≈ **39 分钟** | 单 upgrader、50 能量/趟、每趟约 145 tick |
+
+**修正的一个真实效率 bug**（实测发现）：角色原本「一有能量就出发」，harvester 采 4 能量走 5 格去交付 —— 控制器进度因此长期为 0。改为**装满再移动**后吞吐提升约 10 倍（容量 50 vs 单 tick 采 4）。同理应用于 upgrader 与 builder。
+
+**修正的一个配比错误**：BOOTSTRAP 原本按「每 source 一个 harvester」补员，导致在造出 upgrader 之前先造第二个 harvester。而 RCL 1→2 只要 200 能量却解锁 5 个 extension（+250 容量，+83%），是前期回报最高的单步。
 
 > **M4 起刻意不做详细规划。** 远程开采、Power Creeps、市场这些内容，只有在 M3 指标达成、RCL 真的推到那一档时，约束条件（CPU 余量、房间地形、邻居威胁）才具体到可做设计。现在写细节等于对着想象写代码 —— 到 M4 开头单独出一版设计。
 >

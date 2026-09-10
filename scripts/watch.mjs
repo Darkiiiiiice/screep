@@ -52,13 +52,17 @@ socket.on(ScreepsSocketClient.ERROR, (err) =>
 );
 
 socket.on('console', (event) => {
-  // Console events arrive as a batch per tick, tagged with the originating
-  // shard and game time.
+  // Console events arrive as a batch per tick. The payload is
+  // `{ messages: { log: string[], results: [] }, shard }` — there is no
+  // `gameTime` field, because the game time is already embedded in each log
+  // line (our logger prefixes it). Reading a non-existent field is what made an
+  // earlier version print `[?]` for every line.
   const messages = event?.data?.messages ?? {};
-  const gameTime = event?.data?.gameTime ?? '?';
+  const shardName = event?.data?.shard ?? shard;
+
   for (const channel of Object.keys(messages)) {
     for (const line of messages[channel] ?? []) {
-      emit(`[${gameTime}] ${line}`);
+      emit(`[${shardName}] ${line}`);
     }
   }
 });

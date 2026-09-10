@@ -27,6 +27,7 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 | `npm run deploy [-- --dry-run]` | 上传 `dist/main.js` 到分支 | `POST /api/user/code` |
 | `npm run watch [-- --seconds N]` | WebSocket 流式订阅 console | **否**（不占 HTTP 配额） |
 | `npm run stats` | 拉取 memory segment 统计，追加 `docs/live-metrics.md` | `GET /api/user/memory-segment` |
+| `npm run snapshot` | 录制线上房间快照为测试夹具（轨道 B 的输入） | 2 次请求 |
 
 ## 配额是硬约束
 
@@ -65,8 +66,26 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 
 ## 当前状态
 
-- **M0 完成**：四道门禁全绿，token 连通，shard 自动识别，端到端部署已验证。
-- **M1 完成**：内核骨架全部落地（tick 管线 / CPU 降级 / heap / cache / Memory 迁移与 GC / 日志限流 / 错误隔离 / profiler / stats 段），54 单测通过。
+**M0 / M1 / M2 已完成，AI 正在线上运行。**
+
+- **M0**：五道门禁全绿，token 连通，shard 自动识别，端到端部署已验证。
+- **M1**：内核骨架（tick 管线 / CPU 降级 / heap / cache / Memory 迁移与 GC / 日志节流 / 错误隔离 / profiler / stats 段）。
+- **M2**：任务租约、角色行为、RCL 状态机、spawn 管理。**线上闭环已实测**：harvester 采满 → 交付 spawn → upgrader 出生 → 控制器进度增长。
+
+143 单测 + 真实房间回放 + 15 项 smoke 断言。
+
+### 线上实测基线（shard3）
+
+| 指标 | 实测 |
+|---|---|
+| tick 速率 | **约 4 秒/tick** |
+| 房间 | `W34S1`（controller 43,17 / spawn 24,10 / 2 sources） |
+| 移速 | 约 2 tick/格 |
+
+两个由实测发现并修复的问题值得记住：
+
+1. **装满再移动**。角色原本「一有能量就出发」，harvester 采 4 能量走 5 格 —— 控制器进度长期为 0。修复后吞吐提升约 10 倍。
+2. **BOOTSTRAP 只留一个 harvester**。「每 source 一个」会让殖民地在造出 upgrader 前先造第二个 harvester；而 RCL 1→2 只要 200 能量却解锁 +250 容量，是前期回报最高的单步。
 
 ### `npm run smoke` 能证明什么、不能证明什么
 

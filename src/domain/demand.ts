@@ -52,15 +52,20 @@ export function roleDemand(room: RoomView, state: ColonyState): RoleDemand[] {
 
   const demands: RoleDemand[] = [];
 
-  // One harvester per source: a WORK part yields 2 energy/tick, and a single
-  // source regenerates 3000 energy per 300 ticks, so saturating one takes more
-  // WORK than a BOOTSTRAP economy can pay for. One body per source is the point
-  // where adding a second to the same source stops adding income.
-  const harvesters = Math.max(base.harvester ?? 0, sourceCount);
+  // One harvester per source at ESTABLISHED and above: there, containers buffer
+  // and a dedicated creep can sit on a source, so saturating each source is
+  // what raises income.
+  //
+  // At BOOTSTRAP that rule actively hurts, because it makes the colony build a
+  // second harvester before it ever builds an upgrader. A 300-capacity room
+  // supports one self-hauling creep, and RCL 1 -> 2 costs only 200 energy while
+  // unlocking 5 extensions (+250 capacity) — the best return available anywhere
+  // in the early game. Delaying it to double the harvester count is a bad trade.
+  const harvesters = state === 'BOOTSTRAP' ? 1 : Math.max(base.harvester ?? 1, sourceCount);
   demands.push({
     role: 'harvester',
     count: harvesters,
-    reason: `${String(sourceCount)} source(s)`,
+    reason: state === 'BOOTSTRAP' ? 'single self-hauling creep' : `${String(sourceCount)} source(s)`,
   });
 
   if (base.hauler) {

@@ -108,12 +108,50 @@ describe('live snapshots', () => {
 describe('demand against the real room', () => {
   const snapshot = snapshots[0] as RawSnapshot;
 
-  it('wants one harvester per real source', () => {
+  it('wants a single self-hauling harvester at BOOTSTRAP', () => {
+    // The room has two sources, but at BOOTSTRAP a 300-energy capacity supports
+    // one creep that mines and hauls itself. Wanting one per source would make
+    // the colony build a second harvester before it ever builds an upgrader —
+    // and RCL 1 -> 2 costs only 200 energy for +250 capacity in extensions, so
+    // that ordering is the expensive mistake to avoid.
     const view = toRoomView(snapshot);
     const demand = roleDemand(view, deriveState(view).state);
     const harvesters = demand.find((d) => d.role === 'harvester');
 
-    expect(harvesters?.count).toBe(view.sources.length);
+    expect(view.sources.length).toBeGreaterThan(1);
+    expect(harvesters?.count).toBe(1);
+    expect(harvesters?.reason).toMatch(/self-hauling/);
+  });
+
+  it('wants one harvester per source once containers exist', () => {
+    // The scaling rule that makes sense at BOOTSTRAP is wrong later, and vice
+    // versa: with a container buffering, a dedicated creep per source is what
+    // raises income. Both branches are asserted so neither drifts silently.
+    const base = toRoomView(snapshot);
+    const established = {
+      ...base,
+      // A container is what promotes the state past BOOTSTRAP.
+      stores: [
+        ...base.stores,
+        {
+          id: 'cont1',
+          type: 'container',
+          x: 24,
+          y: 6,
+          room: base.name,
+          energy: 0,
+          energyCapacity: 2000,
+        },
+      ],
+      controller: base.controller ? { ...base.controller, level: 3 } : null,
+    };
+
+    const state = deriveState(established).state;
+    const demand = roleDemand(established, state);
+    const harvesters = demand.find((d) => d.role === 'harvester');
+
+    expect(state).toBe('ESTABLISHED');
+    expect(harvesters?.count).toBe(established.sources.length);
   });
 
   it('wants no builders when the room has no construction sites', () => {

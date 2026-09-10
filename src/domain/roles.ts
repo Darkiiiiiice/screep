@@ -144,26 +144,39 @@ export function decide(creep: CreepView, task: Task | null, room: RoomView): Int
 /**
  * Harvester: mines its own energy and deposits it.
  *
- * At BOOTSTRAP the spawn and its extensions are the only sink, so a full
- * harvester walks back to them — which is why the body needs CARRY as well as
- * WORK.
+ * The rule that matters here is FILL BEFORE TRAVEL. An earlier version delivered
+ * as soon as it held any energy, and the measured effect was severe: the creep
+ * harvested one tick (4 energy with 2 WORK parts), walked five tiles to the
+ * spawn, delivered 4, and walked back — roughly ten tiles of travel per 4 energy,
+ * which is why the room sat at zero controller progress.
+ *
+ * Carrying capacity is 50, so filling first multiplies throughput by an order of
+ * magnitude for the same walking. The exception is a source with nothing left to
+ * give: then delivering a partial load beats standing still until it regrows.
  */
 function decideHarvester(creep: CreepView, task: Task | null, room: RoomView): Intent | null {
-  if (creep.energy > 0) {
-    const sink = bestSink(creep, room);
-    if (sink) return actOrApproach(creep, sink, 'transfer');
+  const full = creep.energy >= creep.carryCapacity;
 
-    // Nothing wants energy: put it into the controller rather than idle with a
-    // full carry. That is strictly better than dropping it.
-    const controller = room.controller;
-    if (controller?.my) return actOrApproach(creep, controller, 'upgrade');
-    return null;
+  if (!full) {
+    const assigned =
+      task?.kind === 'harvest' ? room.sources.find((s) => s.id === task.targetId) : null;
+    const source = assigned?.energy ? assigned : nearest(creep, harvestable(room));
+
+    if (source) return actOrApproach(creep, source, 'harvest');
+
+    // Nothing left to mine. Deliver what is held rather than idle until the
+    // source regenerates.
+    if (creep.energy === 0) return null;
   }
 
-  const assigned = task?.kind === 'harvest' ? room.sources.find((s) => s.id === task.targetId) : null;
-  const source = assigned ?? nearest(creep, harvestable(room));
-  if (!source) return null;
-  return actOrApproach(creep, source, 'harvest');
+  const sink = bestSink(creep, room);
+  if (sink) return actOrApproach(creep, sink, 'transfer');
+
+  // Nothing wants energy: put it into the controller rather than idle with a
+  // full carry. Strictly better than holding it.
+  const controller = room.controller;
+  if (controller?.my) return actOrApproach(creep, controller, 'upgrade');
+  return null;
 }
 
 /**
@@ -190,7 +203,12 @@ function decideHauler(creep: CreepView, room: RoomView): Intent | null {
 /**
  * Upgrader: converts energy into controller progress.
  *
- * Feeds itself from buffers or a source rather than draining the spawn, whose
+ * Same fill-before-travel rule as the harvester, and it matters more here: the
+ * controller is far from the sources, so a creep that upgrades 2 energy per
+ * round trip spends nearly all its time walking. It fills its carry first, then
+ * upgrades until empty.
+ *
+ * It feeds itself from buffers or a source rather than draining the spawn, whose
  * energy is what replaces dead creeps. Trading survival for progress is a bad
  * trade at every level.
  */
@@ -198,13 +216,17 @@ function decideUpgrader(creep: CreepView, room: RoomView): Intent | null {
   const controller = room.controller;
   if (!controller?.my) return null;
 
-  if (creep.energy === 0) {
+  const full = creep.energy >= creep.carryCapacity;
+
+  if (!full) {
     const buffer = nearest(creep, buffers(room));
     if (buffer) return actOrApproach(creep, buffer, 'withdraw');
 
     const source = nearest(creep, harvestable(room));
-    if (!source) return null;
-    return actOrApproach(creep, source, 'harvest');
+    if (source) return actOrApproach(creep, source, 'harvest');
+
+    // Nothing to draw from: spend what is held rather than idle.
+    if (creep.energy === 0) return null;
   }
 
   return actOrApproach(creep, controller, 'upgrade');
@@ -212,19 +234,20 @@ function decideUpgrader(creep: CreepView, room: RoomView): Intent | null {
 
 /** Builder: fetches energy, then applies it to a construction site. */
 function decideBuilder(creep: CreepView, task: Task | null, room: RoomView): Intent | null {
-  if (creep.energy === 0) {
+  const full = creep.energy >= creep.carryCapacity;
+
+  if (!full) {
     const buffer = nearest(creep, buffers(room));
     if (buffer) return actOrApproach(creep, buffer, 'withdraw');
 
     const source = nearest(creep, harvestable(room));
-    if (!source) return null;
-    return actOrApproach(creep, source, 'harvest');
+    if (source) return actOrApproach(creep, source, 'harvest');
+
+    if (creep.energy === 0) return null;
   }
 
   const assigned =
-    task?.kind === 'build'
-      ? room.constructionSites.find((s) => s.id === task.targetId)
-      : undefined;
+    task?.kind === 'build' ? room.constructionSites.find((s) => s.id === task.targetId) : undefined;
   const site = assigned ?? nearest(creep, room.constructionSites);
   if (!site) return null;
   return actOrApproach(creep, site, 'build');

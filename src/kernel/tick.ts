@@ -21,7 +21,7 @@
 import { ownedRooms, viewRoom } from '../game/view';
 import { tickRoom } from '../colony/room';
 import { guard, record } from './errors';
-import { log, flushLogSummary } from './log';
+import { log } from './log';
 import { initMemory, gcDeadCreeps } from './memory';
 import { maybeReportProfile, profilePhase } from './profiler';
 import { maybeWriteStats } from './stats';
@@ -107,10 +107,7 @@ export function kernelTick(): void {
     );
   }
 
-  profilePhase('kernel:report', () => {
-    maybeReportProfile();
-    flushLogSummary();
-  });
+  profilePhase('kernel:report', maybeReportProfile);
 }
 
 /**
