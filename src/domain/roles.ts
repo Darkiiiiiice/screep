@@ -131,11 +131,6 @@ function harvestable(room: RoomView): SourceView[] {
   return room.sources.filter((s) => s.energy > 0);
 }
 
-/** Energy sources excluding the spawn, whose stock is reserved for spawning. */
-function buffers(room: RoomView): StoreView[] {
-  return energySources(room).filter((s) => s.type !== 'spawn');
-}
-
 /** Where a creep can take energy, preferring a buffer over a raw source. */
 export function decide(creep: CreepView, task: Task | null, room: RoomView): Intent | null {
   switch (creep.role) {
@@ -162,11 +157,55 @@ interface Supply {
   local: boolean;
 }
 
-/** The nearest place to obtain energy, preferring a buffer over a raw source. */
+/**
+ * True when the room has an income source: a living harvester or one being built.
+ *
+ * This gates whether consumers may drain the spawn, and the gate exists because
+ * its absence was observed to kill the colony outright. Measured: a room with one
+ * harvester and four consumers kept its spawn near zero; when the harvester
+ * reached the end of its 1500-tick life, there was nothing banked to replace it.
+ * The remaining creeps then took every unit the moment it arrived, so the spawn
+ * could never accumulate the 200 a new harvester costs — a spiral with no way
+ * out, since the only energy source left was a harvester that no longer existed.
+ *
+ * With no income, the spawn is not a buffer to draw from. It is the colony's only
+ * chance of getting income back, and consumers must mine for themselves until it
+ * succeeds.
+ */
+function hasIncome(room: RoomView): boolean {
+  for (const creep of room.creeps) {
+    if (creep.role === 'harvester') return true;
+  }
+  for (const spawn of room.spawns) {
+    if (spawn.spawningRole === 'harvester') return true;
+    // A creep mid-build has no role recorded if our code did not set it; an
+    // unknown role is treated as absent rather than assumed, so the reserve
+    // stays pessimistic.
+  }
+  return false;
+}
+
+/**
+ * The nearest place for a CONSUMER to obtain energy.
+ *
+ * Stores are preferred over raw sources so consumers do not contend with miners
+ * on the same tile, and the spawn is included — an earlier version excluded it
+ * unconditionally, and a builder and upgrader then starved at zero energy within
+ * sight of a spawn holding 300.
+ *
+ * The exception is the death spiral: with no harvester alive or queued, the spawn
+ * is reserved so it can accumulate a replacement. Consumers mine instead.
+ *
+ * Harvesters deliberately do NOT use this: a miner mines. See decideHarvester.
+ */
 function energySupply(creep: CreepView, room: RoomView): Supply | null {
-  const buffer = nearest(creep, buffers(room));
-  if (buffer) {
-    return { target: buffer, kind: 'withdraw', local: inReach(creep, buffer, 'withdraw') };
+  const stores = hasIncome(room)
+    ? energySources(room)
+    : energySources(room).filter((s) => s.type !== 'spawn');
+
+  const store = nearest(creep, stores);
+  if (store) {
+    return { target: store, kind: 'withdraw', local: inReach(creep, store, 'withdraw') };
   }
 
   const source = nearest(creep, harvestable(room));
@@ -175,6 +214,23 @@ function energySupply(creep: CreepView, room: RoomView): Supply | null {
   }
 
   return null;
+}
+
+/**
+ * The nearest source a harvester can mine.
+ *
+ * Separate from `energySupply` because the two roles have opposite jobs: a miner
+ * produces energy, so it mines rather than queueing behind consumers at the
+ * spawn to withdraw what it could dig up itself.
+ *
+ * Reserving the source for harvesters also removes a contention source: the
+ * measured stall had a builder and an upgrader both walking to the same source
+ * that a harvester was already working.
+ */
+function miningSupply(creep: CreepView, room: RoomView): Supply | null {
+  const source = nearest(creep, harvestable(room));
+  if (!source) return null;
+  return { target: source, kind: 'harvest', local: inReach(creep, source, 'harvest') };
 }
 
 /** True when there is room for more energy. */
@@ -193,7 +249,7 @@ function hasSpace(creep: CreepView): boolean {
 function decideHarvester(creep: CreepView, task: Task | null, room: RoomView): Intent | null {
   const sink = nearest(creep, sinksFor(room));
   const controller = room.controller;
-  const supply = energySupply(creep, room);
+  const supply = miningSupply(creep, room);
 
   // 1. Act on the destination.
   if (creep.energy > 0 && sink && inReach(creep, sink, 'transfer')) {

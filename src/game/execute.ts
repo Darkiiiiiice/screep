@@ -15,6 +15,7 @@
  * through the log instead of being swallowed.
  */
 import type { Intent } from '../domain/types';
+import { heapGet } from '../kernel/heap';
 import { log } from '../kernel/log';
 
 /**
@@ -91,21 +92,36 @@ export function execute(intent: Intent): number {
   // Handing it raw coordinates of a source or spawn produced ERR_NO_PATH — the
   // creep was being sent into a tile it could never stand on.
   if (intent.kind === 'approach') {
-    // Creeps are NOT ignored, and that choice was learned the hard way.
+    // Creeps are NOT ignored — `ignoreCreeps: true` makes a cached path
+    // permanently wrong around an immobile blocker (measured: three creeps frozen
+    // for 60+ ticks, all at zero fatigue).
     //
-    // `ignoreCreeps: true` looks like the fix for creeps blocking each other in a
-    // corridor, but it is incompatible with a blocker that never moves: the
-    // pathfinder keeps choosing the shortest route through that tile, and with a
-    // cached path the creep never reconsiders. Measured live — an immobile creep
-    // one tile from the spawn froze three others for over 60 ticks, all reporting
-    // zero fatigue and zero movement.
+    // But not ignoring them creates the mirror problem, which is why a path
+    // cache alone is not enough either: a cached route can run through a tile
+    // that has since been occupied, and the creep then retries the same blocked
+    // step until the cache expires. Measured: 12 ticks spent on a single tile
+    // whose neighbour was occupied by an inert creep.
     //
-    // Treating creeps as obstacles means a blocked creep gets ERR_NO_PATH, which
-    // is classified as `no-route` (bounded, and retried next tick) and heals as
-    // soon as the blocker shifts. A tick of delay beats a permanent stall.
+    // So: cache by default, and drop the cache when the creep demonstrably stops
+    // making progress. One wasted repath per obstruction, versus a full path
+    // recompute every tick for every creep.
+    //
+    // Progress is measured over a small NEIGHBOURHOOD rather than a single tile,
+    // because the failure is not always immobility: measured live, a creep
+    // oscillated between two adjacent tiles for 40+ ticks, which a
+    // "same tile as last tick" test never sees.
+    const marks = movementMarks();
+    const mark = marks[creep.name];
+    const nearby = mark ? chebyshev(mark, creep.pos) <= 1 : false;
+    const stalled = nearby && Game.time - (mark?.tick ?? 0) >= STALL_TICKS;
+
+    marks[creep.name] = stalled || !nearby
+      ? { x: creep.pos.x, y: creep.pos.y, tick: Game.time }
+      : (mark as MovementMark);
+
     return creep.moveTo(target as unknown as RoomObject, {
       range: intent.range,
-      reusePath: 15,
+      reusePath: stalled ? 0 : 15,
     });
   }
 
@@ -125,6 +141,34 @@ export function execute(intent: Intent): number {
     case 'pickup':
       return creep.pickup(target as Resource);
   }
+}
+
+interface MovementMark {
+  x: number;
+  y: number;
+  tick: number;
+}
+
+/**
+ * Ticks a creep may spend going nowhere before its path cache is discarded.
+ *
+ * Four ticks is roughly two tiles of real movement, so reaching it while still
+ * within one tile of where the run started means the route is blocked rather
+ * than merely slow.
+ */
+const STALL_TICKS = 4;
+
+function chebyshev(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+}
+
+/**
+ * Where each creep's current no-progress run started.
+ *
+ * Heap storage: scratch state whose only cost of loss is one extra repath.
+ */
+function movementMarks(): Record<string, MovementMark> {
+  return heapGet<Record<string, MovementMark>>('movementMarks', () => ({}));
 }
 
 /** Queue a spawn. Body affordability is decided by the caller, not here. */

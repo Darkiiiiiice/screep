@@ -11,7 +11,7 @@
  *
  *   --dry-run  build + validate + report quota, upload nothing
  */
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { connect } from './lib/client.mjs';
 import { checkQuota, record, deployBudget } from './lib/quota-ledger.mjs';
@@ -25,6 +25,32 @@ const BUNDLE = resolve(process.cwd(), 'dist/main.js');
 
 if (!existsSync(BUNDLE)) {
   console.error('[deploy] dist/main.js missing — run `npm run build` first.');
+  process.exit(1);
+}
+
+/**
+ * Refuse to upload a stale bundle.
+ *
+ * This guard exists because it caught a real mistake: `npm run deploy` was run
+ * before `npm run build` in the same shell line, so the previous bundle was
+ * uploaded and the fix under test was not in it — which then looked like the fix
+ * had failed. The deploy costs one of 240 daily uploads, so discovering the
+ * mistake by re-testing is expensive.
+ */
+const newestSource = (dir) =>
+  readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.ts'))
+    .map((e) => statSync(resolve(e.parentPath, e.name)).mtimeMs)
+    .reduce((a, b) => Math.max(a, b), 0);
+
+const bundleTime = statSync(BUNDLE).mtimeMs;
+const sourceTime = Math.max(newestSource('src'), newestSource('scripts'));
+
+if (sourceTime > bundleTime) {
+  console.error('[deploy] dist/main.js is older than the sources — run `npm run build` first.');
+  console.error(
+    `[deploy] bundle ${new Date(bundleTime).toISOString()} < source ${new Date(sourceTime).toISOString()}`,
+  );
   process.exit(1);
 }
 

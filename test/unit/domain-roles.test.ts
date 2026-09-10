@@ -59,6 +59,33 @@ describe('rangeBetween', () => {
   });
 });
 
+/**
+ * A room with a living harvester, i.e. one whose spawn may be drained.
+ *
+ * The distinction matters: without a harvester the spawn is reserved so it can
+ * accumulate a replacement (see `hasIncome`).
+ */
+function roomWithIncome(overrides: Partial<RoomView> = {}): RoomView {
+  const base = room(overrides);
+  return {
+    ...base,
+    creeps: [
+      ...base.creeps,
+      {
+        name: 'miner',
+        role: 'harvester',
+        x: 24,
+        y: 6,
+        room: base.name,
+        energy: 0,
+        carryCapacity: 50,
+        parts: { work: 1, carry: 1, move: 2 },
+        taskId: null,
+      },
+    ],
+  };
+}
+
 describe('fill before travel', () => {
   it('keeps a partially loaded harvester on the source instead of delivering', () => {
     // Measured live failure: delivering on `energy > 0` meant one tick of
@@ -248,13 +275,107 @@ describe('energy source preference', () => {
     expect((intent as { targetId: string }).targetId).toBe('cont1');
   });
 
-  it('falls back to self-harvesting when no buffer exists', () => {
-    // At BOOTSTRAP there are no containers, so an upgrader that only drained the
-    // spawn would starve the colony of replacements.
-    const view = room({ stores: [store('spawn1', 'spawn', 24, 10, 300, 300)] });
+  it('draws from the spawn when a harvester is keeping it full', () => {
+    // Measured failure this pins: with the spawn full at 300/300, a builder and
+    // an upgrader sat at zero energy within sight of it, both stuck walking to a
+    // distant source. At RCL 1-2 the spawn is the room's only energy store, and
+    // a store that cannot be drained is not a buffer.
+    const view = roomWithIncome({ stores: [store('spawn1', 'spawn', 24, 10, 300, 300)] });
+    const intent = decide(creep({ role: 'upgrader', energy: 0, x: 24, y: 11 }), null, view);
+
+    expect(intent?.kind).toBe('withdraw');
+    expect((intent as { targetId: string }).targetId).toBe('spawn1');
+  });
+
+  it('reserves the spawn instead, when no harvester exists to refill it', () => {
+    // The death spiral this prevents, observed live: one harvester, four
+    // consumers, spawn pinned near zero. The harvester reached the end of its
+    // 1500-tick life, and the remaining creeps took every arriving unit, so the
+    // spawn could never accumulate the 200 a replacement costs. With no income,
+    // the spawn is the colony's only route back to income and must not be spent.
+    const view = room({
+      sources: [source('src1', 24, 5)],
+      stores: [store('spawn1', 'spawn', 24, 10, 300, 300)],
+    });
+
+    // No harvester in `view.creeps`, so the reserve applies: the creep heads for
+    // the source even though the spawn beside it is full.
+    const intent = decide(creep({ role: 'upgrader', energy: 0, x: 24, y: 11 }), null, view);
+
+    expect(intent?.kind).not.toBe('withdraw');
+    // Either mining in place if adjacent, or walking to the source.
+    if (intent?.kind === 'approach') {
+      expect((intent as { targetId: string }).targetId).toBe('src1');
+    } else {
+      expect(intent?.kind).toBe('harvest');
+    }
+  });
+
+  it('treats a harvester still in the spawn queue as income', () => {
+    // A replacement being built already counts, so consumers resume draining as
+    // soon as the colony has committed to restoring income.
+    const view = room({
+      stores: [store('spawn1', 'spawn', 24, 10, 300, 300)],
+      spawns: [
+        {
+          id: 'spawn1',
+          name: 'Spawn1',
+          x: 24,
+          y: 10,
+          room: 'W1N1',
+          energy: 300,
+          energyAvailable: 300,
+          energyCapacityAvailable: 550,
+          spawning: true,
+          spawningName: 'harvester-W1N1-1',
+          spawningRole: 'harvester',
+          spawnTicksRemaining: 5,
+        },
+      ],
+    });
+
+    const intent = decide(creep({ role: 'upgrader', energy: 0, x: 24, y: 11 }), null, view);
+    expect(intent?.kind).toBe('withdraw');
+  });
+
+  it('falls back to mining only when every store is empty', () => {
+    const view = room({ stores: [store('spawn1', 'spawn', 24, 10, 0, 300)] });
     const intent = decide(creep({ role: 'upgrader', energy: 0, x: 24, y: 6 }), null, view);
 
     expect(intent?.kind).toBe('harvest');
+  });
+
+  it('sends a builder to the spawn rather than the source when the spawn holds energy', () => {
+    const view = roomWithIncome({
+      sources: [source('src1', 24, 5)],
+      stores: [store('spawn1', 'spawn', 24, 10, 300, 300)],
+      constructionSites: [
+        {
+          id: 'site1',
+          x: 30,
+          y: 30,
+          room: 'W1N1',
+          structureType: 'extension',
+          progress: 0,
+          progressTotal: 3000,
+        },
+      ],
+    });
+
+    // Adjacent to the spawn; the source is 5 tiles away.
+    const intent = decide(creep({ role: 'builder', energy: 0, x: 24, y: 11 }), null, view);
+
+    expect(intent?.kind).toBe('withdraw');
+    expect((intent as { targetId: string }).targetId).toBe('spawn1');
+  });
+
+  it('keeps the harvester mining rather than queueing at the spawn', () => {
+    // A miner mines. Sending it to withdraw what it could dig up itself would
+    // also add contention at the spawn with the consumers that need it.
+    const view = roomWithIncome({ stores: [store('spawn1', 'spawn', 24, 10, 300, 300)] });
+    const intent = decide(creep({ energy: 0, x: 24, y: 11 }), null, view);
+
+    expect(intent?.kind).not.toBe('withdraw');
   });
 });
 

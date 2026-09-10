@@ -18,11 +18,29 @@ import type { RoomView } from '../domain/types';
 import type { StructureWant } from '../domain/build';
 import { log } from '../kernel/log';
 
+/**
+ * The ring of tiles a creep must be able to stand on to use the spawn.
+ *
+ * Reserved permanently. Without this the placement rule "as close to the spawn
+ * as possible" walls the spawn in: measured live, four extension sites plus one
+ * inert creep occupied five of the spawn's eight neighbours, and a harvester
+ * carrying a full load bounced between two tiles for 40+ ticks, never reaching
+ * the spawn to deliver. Construction sites block pathfinding exactly as built
+ * structures do, so this is not a temporary state.
+ *
+ * Eight tiles out of roughly 1500 walkable is no cost; a spawn that cannot be
+ * reached is total.
+ */
+function isSpawnApproachTile(spawn: StructureSpawn, x: number, y: number): boolean {
+  return Math.max(Math.abs(x - spawn.pos.x), Math.abs(y - spawn.pos.y)) <= 1;
+}
+
 /** True when a tile is walkable terrain with nothing on it. */
-function isFree(room: Room, x: number, y: number): boolean {
+function isFree(room: Room, spawn: StructureSpawn, x: number, y: number): boolean {
   // The outermost ring is kept clear: a structure on the border can leave a
   // creep with no way round it.
   if (x < 1 || y < 1 || x > 48 || y > 48) return false;
+  if (isSpawnApproachTile(spawn, x, y)) return false;
   if (room.getTerrain().get(x, y) === TERRAIN_MASK_WALL) return false;
   if (room.lookForAt(LOOK_STRUCTURES, x, y).length > 0) return false;
   if (room.lookForAt(LOOK_CONSTRUCTION_SITES, x, y).length > 0) return false;
@@ -71,7 +89,7 @@ function search(
 
         const x = spawn.pos.x + dx;
         const y = spawn.pos.y + dy;
-        if (!isFree(room, x, y)) continue;
+        if (!isFree(room, spawn, x, y)) continue;
         if (avoidWalls && touchesWall(room, x, y)) continue;
 
         spots.push({ x, y });
@@ -100,15 +118,49 @@ export function findSpots(room: Room, spawn: StructureSpawn, count: number): { x
 }
 
 /**
+ * Remove sites that sit on the spawn's approach ring.
+ *
+ * Repairs rooms built before the ring was reserved. The sites are discarded
+ * rather than relocated in place; the next `placeWanted` puts them somewhere
+ * legal, and a site holds no energy that clearing it would waste.
+ *
+ * @returns how many sites were removed
+ */
+export function clearSpawnApproach(room: Room): number {
+  const spawn = room.find(FIND_MY_SPAWNS)[0];
+  if (!spawn) return 0;
+
+  let removed = 0;
+  for (const site of room.find(FIND_MY_CONSTRUCTION_SITES)) {
+    if (!isSpawnApproachTile(spawn, site.pos.x, site.pos.y)) continue;
+    if (site.remove() === OK) removed += 1;
+  }
+  return removed;
+}
+
+/**
  * Place construction sites for the wanted structures.
  *
  * @returns how many sites were actually placed
  */
 export function placeWanted(room: Room, wants: StructureWant[], roomViewForLog: RoomView): number {
-  if (wants.length === 0) return 0;
-
   const spawn = room.find(FIND_MY_SPAWNS)[0];
   if (!spawn) return 0;
+
+  // Repair BEFORE the "nothing wanted" early return. A room whose spawn is
+  // already walled in has its structure ceiling met, so `wants` is empty — and
+  // returning early here meant the repair never ran at all, leaving the spawn
+  // sealed and the colony permanently stalled.
+  const cleared = clearSpawnApproach(room);
+  if (cleared > 0) {
+    log(
+      'warn',
+      `build:${roomViewForLog.name}:clear`,
+      `${roomViewForLog.name} cleared ${String(cleared)} site(s) blocking the spawn approach`,
+    );
+  }
+
+  if (wants.length === 0) return 0;
 
   let placed = 0;
 
