@@ -14,8 +14,9 @@
 | Memory 上限 | 2 MB，跨 tick 走 `JSON.parse/stringify` | docs/global-objects |
 | 类型定义 | `@types/screeps@3.4.0`（2026-04 更新） | npm registry |
 | 部署工具 | `screeps-api@2.1.0` | npm registry |
-| 本地引擎模拟 | `screeps-server-mockup@1.5.1` → `screeps@4.3.0` → `@screeps/storage@5.1.3`（**lokijs 内存存储，无需 mongo/redis**） | npm registry 依赖链 |
-| 本地引擎编译前提 | native 编译（`@screeps/driver@5.3.0` 钉 `isolated-vm` git master）+ Python + base-devel；`screeps@4.3.0` 要求 node>=22.9，本机 Node 26.8.2 满足 | npm registry |
+| 本地引擎模拟 | `screeps-server-mockup@1.5.1` → `screeps@4.3.0` → `@screeps/storage@5.1.3`（**lokijs 存储，无需 mongo/redis**） | npm registry 依赖链 |
+| 本地引擎编译前提 | native 编译（`@screeps/driver@5.3.0` 钉 `isolated-vm` git commit）+ node-gyp 12；本机已具备 Python 3.14.7 / make 4.4.1 / g++ 16.2.1；`screeps@4.3.0` 要求 node>=22.9，本机 Node 26.8.2（ABI 147）满足 | npm registry + 本机探测 |
+| 私服方案（后备） | `screepers/screeps-launcher`（Go，2026-09-07 仍在推）—— **自行管理 Node 版本**（默认 Node 24，可用 `nodeVersion` 指定）、自带 npm 包与 mod 安装；**默认存储即 `@screeps/storage`(lokijs)，不装 mongo/redis 也能跑**；`tickRate` 可配（下限 1000ms，官方警告过低会出问题） | launcher README |
 | 官方路线图（2026） | 恢复 3 个月赛季重置；补 Power Creeps（Commander/Executor）；新分片（约 1s tick）；运行时升级到最新 Node，含**原生 ESM 与文件夹模块支持**、官方 VSCode 扩展 | 官方 2026 roadmap |
 
 **对架构的两个直接推论**
@@ -116,9 +117,45 @@ flowchart LR
 - **禁止 per-creep 状态**（`Memory.creeps.*` 只留角色与最小标记）。creep 个体状态走 heap 以 id 索引 —— 直接规避 2 MB 上限与每 tick 全量 `JSON.stringify` 成本。
 - 大块情报（房间地图、CostMatrix）走 `RawMemory` segment，不进 `Memory`。
 
----
+### 3.4 殖民地状态机（按 RCL 键控）
 
-## 4. 验证双轨（+ 线上核对）
+角色不是静态列表 —— 同一批角色在 RCL1 和 RCL6 该干的事完全不同（RCL1 无容器，只能 source↔spawn 直连搬运；RCL6 有 storage/terminal/link，需要物流层）。因此**房间行为由其 RCL 导出的状态决定**：
+
+| 状态 | RCL | 结构前提 | 角色配比（示意） | 主要矛盾 |
+|---|---|---|---|---|
+| `BOOTSTRAP` | 1–2 | 无容器 / 刚出容器 | harvester 直接自采自送；1 个 upgrader | 能量总量不足，任何多余角色都会饿死 |
+| `ESTABLISHED` | 3–5 | 容器、extensions | harvester 定点 + hauler 转运 + upgrader + builder | 物流效率；补员节奏跟不上消耗 |
+| `MATURE` | 6–7 | storage、terminal、link | 引入 link 链路、专用 miner、物流分层 | CPU 预算与房间数同时上升 |
+| `EXPANSION` | 8 | 全量 | 在 MATURE 基础上分出殖民/远程队 | 跨房调度与 CPU 分配 |
+
+状态阈值直接取自官方 RCL 结构表（`docs.screeps.com/control.html`），这些数字就是状态迁移的判定依据：
+
+| RCL | 升到下一级所需能量 | 该级解锁的关键结构 |
+|---|---|---|
+| 0 | — | 中立/未占领（仅 roads、5 containers） |
+| 1 | 200 | **1 Spawn** ← 占领后即时可达 |
+| 2 | 45,000 | 5 Extensions（50 容量） |
+| 3 | 135,000 | 10 Extensions、**1 Tower** |
+| 4 | 405,000 | 20 Extensions、**Storage** |
+| 5 | 1,215,000 | 30 Extensions、**2 Links** |
+| 6 | 3,645,000 | 40 Extensions、3 Links、**Extractor、3 Labs、Terminal** |
+| 7 | 10,935,000 | 50 Extensions（100 容量）、**2nd Spawn**、4 Links、Factory |
+| 8 | — | 60 Extensions（200 容量）、3 Spawns、**Observer、Power Spawn、Nuker** |
+
+关键含义：
+
+- RCL **1→2 只需 200 能量**，而 **2→3 要 45,000**（225 倍）—— 这是整个前中期最陡的性价比断崖。`BOOTSTRAP` 到 `ESTABLISHED` 的迁移判据必须围绕"何时能稳定产出 45k 能量"来定，而不是简单地看等级数字。
+- 容器上限只有 **5 个**（RCL 0 起就是 5，之后不增），因此容器选址是**一次性决策**，选错了没有第二次机会 —— 这条要在 M3 里当成硬约束写进测试。
+- `ESTABLISHED` 的能量累计目标：RCL 1→5 共需 200 + 45,000 + 135,000 + 405,000 = **585,200 能量**（即 M3 验收标准的由来）。
+- Controller 在 RCL 1 的降级计时是 **20,000 tick**，这意味着"停更 upgrader"在 RCL 1 就有致命风险 —— 补员优先级里 upgrader 不能排太低。
+
+- 状态**只由 `room.controller.level` + 实际建成的结构推导**，不存 Memory（可从 `Game` 重建，符合 §3.2 heap 不变式）。
+- 每个状态声明自己需要的角色清单与数量；`domain/plans/` 按当前状态算需求，spawn manager 照单补员。
+- 状态迁移是**单向且带滞后**（RCL 掉了或结构被拆，退回上一状态），避免在阈值上抖动。
+
+这条设计同时是里程碑的排序依据 —— 见 §5。
+
+
 
 ### 轨道 A —— fixture 单测（快速、离线、确定性）
 
@@ -142,15 +179,17 @@ flowchart LR
 
 ## 5. 里程碑与验收标准
 
-| 里程碑 | 内容 | 可观测验收标准 |
-|---|---|---|
-| **M0 基础设施** | 仓库初始化、构建/类型检查/测试/部署/sim 五条命令、MMO token 连通性核对 | `npm run typecheck && npm test && npm run build` 全绿；`npm run sim` 跑 100 tick 并拿到 console；`screeps-api` `me()` 返回正确用户名与目标 shard |
-| **M1 内核骨架** | tick 管线、CPU 预算与降级、cache/heap/memory/log/errors/profiler | 空内核连续 200 tick 稳定；profiler 输出各阶段耗时；注入一处故意抛错，tick 不中断且错误只上报一次；Memory 大小恒定 |
-| **M2 任务系统 + 角色** | 任务注册表与租约、角色行为表、需求/配比规划、spawn manager | 轨道 A 覆盖任务全生命周期（申请/抢占/超时释放）；轨道 B 中 creep 自主完成 harvest → deliver 全链，死亡后自动补员 |
-| **M3 单房间经济自循环** | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应 | **连续 2000 tick 无 creep 断档**；RCL 0→4；CPU 峰值 < 20；Memory 大小波动 < 5% |
-| **M4 多房间扩张** | claim、远程开采、跨房物流、基础防御、情报分段化 | 第 2 房间达 RCL4；远程矿点稳定产出；情报走 RawMemory segment；CPU 仍在预算内 |
-| **M5 对抗与性能** | 侦察、进攻/防守策略、bucket 利用、PathFinder 缓存 | 在 CPU 20 约束下支撑 M4 规模；单 tick 峰值不超 `tickLimit` |
+| 里程碑 | 对应殖民状态 | 内容 | 可观测验收标准 |
+|---|---|---|---|
+| **M0 基础设施** | — | 仓库初始化、构建/类型检查/测试/部署/sim 五条命令、MMO token 连通性核对 | `npm run typecheck && npm test && npm run build` 全绿；`npm run sim` 跑 100 tick 并拿到 console；`screeps-api` `me()` 返回正确用户名与目标 shard |
+| **M1 内核骨架** | — | tick 管线、CPU 预算与降级、cache/heap/memory/log/errors/profiler | 空内核连续 200 tick 稳定；profiler 输出各阶段耗时；注入一处故意抛错，tick 不中断且错误只上报一次；Memory 大小恒定 |
+| **M2 任务系统 + 角色** | — | 任务注册表与租约、角色行为表、**状态机骨架（先只实现 `BOOTSTRAP`）**、spawn manager | 轨道 A 覆盖任务全生命周期（申请/抢占/超时释放）；轨道 B 中 creep 自主完成 harvest → deliver 全链，死亡后自动补员 |
+| **M3 `BOOTSTRAP`→`ESTABLISHED`** | RCL 1–5 | 容器/存储、RCL 升级、builder/upgrader 配比、body 按能量自适应、状态迁移判定 | **连续 2000 tick 无 creep 断档**；RCL **1→5**（累计投入 585,200 能量）；CPU 峰值 < 20；Memory 波动 < 5% |
+| **M4 `MATURE`** | RCL 6–7 | link 链路、专用 miner、物流分层、**届时再设计** | RCL 6+；link 生效后 CPU 不升反降 |
+| **M5+ 扩张与对抗** | RCL 8 | claim、远程开采、防御、Power Creeps —— **细节刻意不在此规划** | — |
 
+> **M4 起刻意不做详细规划。** 远程开采、Power Creeps、市场这些内容只有在 M3 指标达成、且 RCL 真的推到那一档时，约束条件（CPU 预算余量、房间地形、邻居威胁）才具体到可以做设计。现在写细节等于对着想象写代码 —— 到 M4 开头单独出一版设计。
+>
 > 硬约束：M1 只交付上表内核服务，**任何新增抽象都必须在 M3 的指标上有对应收益**。内核框架的最大风险是自我膨胀到永远没有可玩产出。
 
 ---
@@ -169,10 +208,10 @@ flowchart LR
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
-| `isolated-vm` 在 Node 26 编译失败 | 轨道 B 不可用 | M0 第一步就验证；失败切轨道 B'（fixture 回放） |
+| `isolated-vm`（`@screeps/driver@5.3.0` 钉的 git commit）在 Node 26 编译失败 | 轨道 B 不可用 | **已在验证中**（`~/.cache/screeps-spike`）；失败则切 `screeps-launcher`（自带 Node 24，绕开本机 Node 26 的 ABI 问题），再失败切轨道 B'（fixture 回放） |
 | `@types/screeps@3.4.0` 与 TS 7.0.2 不兼容 | 类型门禁报错 | 回退并 pin TS 5.x；打包走 esbuild，不受影响 |
 | 内核过度设计 | M3 长期无产出 | M1 硬性服务清单 + 新增抽象需 M3 指标支撑 |
-| CPU 20 ms 预算不足 | 线上脚本被杀/行为截断 | 阶段降级 + 每 creep 执行预算 + bucket 感知；M3 硬指标 CPU 峰值 < 20 |
+| **CPU 20 是硬顶**（未解锁时 GCL 涨也不加 CPU） | M4/M5 的多房间方案在 20 CPU 下不可行 | 见 §8 决策项；在 20 CPU 内把单房间做到极致本身即 M3 目标 |
 | Memory 2 MB 与序列化成本 | 中后期性能崩塌 | M1 起禁止 per-creep Memory；情报走 RawMemory segment |
 | 赛季重置 / 新分片 | 部署参数失效 | shard/world 一律走配置项 |
 | 上线事故无法回滚 | 生产中断 | 只从 `dev` 分支观察通过后才动 `main`；保留上一版产物 |
@@ -180,10 +219,27 @@ flowchart LR
 
 ---
 
-## 8. 立即执行（P0 前置验证，约 30 分钟）
+## 8. 需要你拍板的两件事（无法由代码或文档决定）
 
-1. `git init` + `npm init`，装依赖：`typescript`、`esbuild`、`vitest`、`@types/screeps`、`@types/node`、`eslint`+`prettier`。
-2. **验证本地引擎**：装 `screeps-server-mockup`，写一个 100 tick 的最小 bot 跑通 —— 这一步决定轨道 B 是否成立。
+### 8.1 CPU Unlock —— 决定 M4 是否可行
+
+官方规则：**未解锁时 CPU 固定 20**（`Game.cpu.limit`），GCL 提升不会加 CPU；解锁后每 GCL +10，上限 300。bucket 上限 10,000、单 tick 可透支最多 500，所以 20 CPU 靠攒 bucket 能做**偶发**重算（PathFinder），但扛不住**持续**的多房间负载。
+
+- 若长期不解锁：M4/M5 应重新定义为"在 20 CPU 内把单房间做到极致 + 极轻量远程开采"，多房间扩张不现实。这其实是个挺有嚼头的约束 —— 20 CPU 下的极限优化比堆房间更考验工程。
+- 若愿意解锁：M4 的多房间路线按原计划推进，但要在 M5 加入"CPU 预算随 GCL 重算"的逻辑。
+
+**这不影响 M0–M3** —— 20 CPU 正好是 M3 的硬指标，先按不解锁做，届时再定。
+
+### 8.2 是否接受 `screeps-launcher` 作为后备私服
+
+它自带 Node 24（绕开本机 Node 26 的 native 编译风险），但会**自行管理一份 Node 运行时**并在项目外写入。若你不希望机器上多出一个自管 Node，我就只能选轨道 B'（fixture 回放，丢掉物理语义）。
+
+---
+
+## 9. 立即执行（P0 前置验证）
+
+1. ~~`git init`~~ 已完成（`7a5610c`）。
+2. **验证本地引擎**（进行中）：`~/.cache/screeps-spike` 正在 `npm i screeps-server-mockup`，即在验证 `isolated-vm` 能否在 Node 26 编译 —— 决定轨道 B 是否成立。
 3. **验证 MMO 连通**：用 `screeps-api` 调 `me()`，确认 token 有效并记录目标 shard 名称。
 
-三项任一失败都会改变后续计划，因此必须先做完再进 M1。
+第 2、3 项任一失败都会改变后续方案，因此必须先做完再进 M1。
