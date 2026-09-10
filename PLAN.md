@@ -183,11 +183,31 @@ flowchart LR
 | `errors` | 按「签名 + 位置」去重，仅首次/每 N tick 输出；栈压进 `Memory` 环形缓冲（最近 50 条） | 单点异常绝不能中断整 tick |
 | `profiler` | 分阶段 CPU + creep 数 + 内存大小，按递增间隔汇总 | 汇总本身有成本 |
 
-### 3.3 Memory 策略（M1 就锁死）
+### 3.3 Memory 策略（从 M1 就锁死）
 
-- `Memory` **只存**：schema 版本、任务租约、情报摘要、参数覆盖。
-- **禁止 per-creep 状态**（`Memory.creeps.*` 只留角色与最小标记）。creep 个体状态走 heap 以 id 索引 —— 直接规避 2 MB 上限与每 tick 全量 `JSON.stringify` 成本。
-- 大块情报（房间地图、CostMatrix）与**统计**都走 `RawMemory` segment。
+**`Memory` 只存**：schema 版本、错误环形缓冲、参数覆盖、情报摘要。
+
+**不存 `Memory` 的三类，以及各自去哪：**
+
+| 数据 | 存放 | 理由 |
+|---|---|---|
+| per-creep 个体状态 | `global` heap（按 id 索引） | 2 MB 上限 + 每 tick 全量 `JSON.stringify`；creep 数量增长时这是最先崩的地方 |
+| 任务板（含租约） | `global` heap | **见下** |
+| 大地图 / 情报 / 统计 | `RawMemory` segment | 不进 2 MB 预算，且读取配额是 `Memory` 的 6 倍（§1.2） |
+
+**任务板为什么在 heap 而不是 Memory** —— 这条值得写下来，因为直觉上会选 Memory：
+
+> 任务板**不是累积状态，而是对派生工作的预约**。`planTasks` 每 tick 从房间快照**重建**整个任务集合并剪掉不再需要的（§3.4 的派生性质）；租约只是「这活儿归谁」的标记，脱离它所预约的工作就没有意义。既然工作每 tick 重建，预约也可以。
+
+具体权衡：
+
+- 放 Memory 的代价是**每 tick 一次随任务数增长的 `JSON.stringify`**，收益是租约能活过部署。
+- 但活过部署几乎不值钱：部署后 creep 仍在按旧代码行动，下一 tick 板子从同一个房间重建出同一批任务，creep 重新租到同样的活。最坏情况是「一个 creep 从送往容器 X 改成送往容器 Y」。
+- 放 heap 的唯一真实损失是租约**截止时间**被重置 —— 而截止时间的作用恰恰是抓「不再请求工作的 creep」，它在 `DEFAULT_LEASE_TICKS`（50 tick）内就会重新判定。重启只是让这个计时器归零。
+
+**租约续期语义（M2 修正的一个真实 bug）**：creep **每次请求工作时续期**。原实现里 `leaseTask` 对已持有租约的 creep 直接返回而**不续期**，于是连续工作 50 tick 后租约必然过期 —— 只因下一 tick 又重新租到同一任务才没出事。这既是徒劳的抖动，也意味着有两间房时，正在进行的工作可能被抢走。
+
+- 禁止 per-creep 状态进 `Memory`（`Memory.creeps.*` 只留角色与最小标记）。
 
 ### 3.4 殖民地状态机（按 RCL 键控）
 

@@ -57,6 +57,10 @@ export interface RoomTickResult {
   reaped: number;
   /** Tasks dropped because their target no longer exists. */
   dropped: number;
+  /** Tasks pruned because the planner no longer wants that work. */
+  pruned: number;
+  /** Living creeps in the room, including any mid-build. */
+  population: number;
   /** Why nothing spawned, when nothing did. */
   spawnReason: string;
 }
@@ -80,9 +84,12 @@ export function tickRoom(view: RoomView): RoomTickResult {
   if (view.controller) validTargets[view.controller.id] = true;
   const dropped = dropTasksForMissingTargets(b, validTargets);
 
-  // 3. Create this tick's work.
+  // 3. Rebuild this tick's work. The planner is the authority: it prunes any
+  //    task it did not produce, so work that stopped being useful (a drained
+  //    source, a finished site) leaves the board instead of being offered to a
+  //    creep that would find nothing to do.
   const state = deriveState(view).state;
-  planTasks(b, view, state, now);
+  const plan = planTasks(b, view, state, now);
 
   const intents: Intent[] = [];
 
@@ -115,6 +122,10 @@ export function tickRoom(view: RoomView): RoomTickResult {
     })),
     reaped,
     dropped,
+    pruned: plan.pruned,
+    // Counts creeps still being built too, so a creep in the spawn queue shows
+    // up as population before it hatches.
+    population: Object.values(populationByRole(view)).reduce<number>((a, b) => a + (b ?? 0), 0),
     spawnReason: spawning.reason,
   };
 }

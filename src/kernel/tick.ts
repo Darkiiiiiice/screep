@@ -165,10 +165,14 @@ function tickColony(): void {
 
     // The room name is in the message, not just the throttle signature: with
     // several rooms this line is otherwise unattributable in the console.
+    //
+    // `creeps` and `spawn` together answer "is the economy alive" at a glance,
+    // which is the question this line exists to answer. CPU budget alone cannot
+    // distinguish a working colony from an idle one.
     log(
       'info',
       `room:${room.name}`,
-      `${room.name} ${result.state} intents=${String(result.tally.attempted)} ok=${String(result.tally.succeeded)} deferred=${String(result.tally.deferred)} reaped=${String(result.reaped)} spawn=${result.spawnReason}`,
+      `${room.name} ${result.state} creeps=${String(result.population)} intents=${String(result.tally.attempted)} ok=${String(result.tally.succeeded)} deferred=${String(result.tally.deferred)} reaped=${String(result.reaped)} pruned=${String(result.pruned)} spawn=${result.spawnReason}`,
     );
   }
 }

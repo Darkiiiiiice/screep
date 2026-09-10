@@ -25,8 +25,6 @@ export interface Task {
   /** Object the task acts on. */
   targetId: string;
   room: string;
-  /** Units of work left; a partial task stays on the board. */
-  remaining: number;
   /**
    * Dedup key. The planner regenerates tasks from the snapshot every tick, so
    * without a stable key the board would multiply tasks each tick.
@@ -62,7 +60,6 @@ export interface TaskSpec {
   targetId: string;
   room: string;
   role: Role;
-  remaining?: number;
   priority?: number;
 }
 
@@ -87,11 +84,8 @@ export function addTask(board: TaskBoard, spec: TaskSpec, now: number): Task {
 
   for (const task of Object.values(board.tasks)) {
     if (task.key !== key) continue;
-    // Refresh the desired amount upward only: a task part-done by another creep
-    // must not have its remaining work reset.
-    if (spec.remaining !== undefined && spec.remaining > task.remaining) {
-      task.remaining = spec.remaining;
-    }
+    // Priority may only rise. A re-add exists to keep the task present, not to
+    // undo a change another producer made.
     if (spec.priority !== undefined && spec.priority > task.priority) {
       task.priority = spec.priority;
     }
@@ -103,7 +97,6 @@ export function addTask(board: TaskBoard, spec: TaskSpec, now: number): Task {
     kind: spec.kind,
     targetId: spec.targetId,
     room: spec.room,
-    remaining: spec.remaining ?? 1,
     key,
     leasedBy: null,
     leasedUntil: 0,
@@ -154,8 +147,16 @@ export function leaseTask(
   now: number,
 ): Task | null {
   // One task per creep: a creep with a lease must finish or lose it first.
+  //
+  // Asking for work RENEWS the lease. Without this the deadline silently expired
+  // out from under a creep that was working the whole time — the creep calls
+  // this every tick, so its own request is the liveness proof the deadline is
+  // meant to approximate. The deadline then only catches a creep that stopped
+  // calling (stuck, or dead without its lease being reaped).
   for (const task of Object.values(board.tasks)) {
-    if (task.leasedBy === creepName) return task;
+    if (task.leasedBy !== creepName) continue;
+    task.leasedUntil = now + DEFAULT_LEASE_TICKS;
+    return task;
   }
 
   let best: Task | null = null;
@@ -180,14 +181,6 @@ function isBetter(candidate: Task, incumbent: Task): boolean {
   if (candidate.priority !== incumbent.priority) return candidate.priority > incumbent.priority;
   if (candidate.created !== incumbent.created) return candidate.created < incumbent.created;
   return candidate.id < incumbent.id;
-}
-
-/** Extend a lease still being worked on, so it is not reaped. */
-export function renewLease(board: TaskBoard, creepName: string, now: number): void {
-  for (const task of Object.values(board.tasks)) {
-    if (task.leasedBy !== creepName) continue;
-    task.leasedUntil = now + DEFAULT_LEASE_TICKS;
-  }
 }
 
 /**

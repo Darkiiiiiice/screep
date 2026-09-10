@@ -8,7 +8,6 @@ import {
   emptyBoard,
   leaseTask,
   releaseTask,
-  renewLease,
   reapExpired,
   taskKey,
 } from '@/domain/tasks';
@@ -40,18 +39,6 @@ describe('task identity', () => {
     for (let tick = 1; tick <= 20; tick += 1) addTask(board, spec('src1'), tick);
 
     expect(boardSummary(board).total).toBe(1);
-  });
-
-  it('raises remaining work but never lowers it', () => {
-    // A task part-done by another creep must not have its progress reset by the
-    // next planning pass.
-    const board = emptyBoard();
-    addTask(board, spec('src1', { remaining: 500 }), 1);
-    addTask(board, spec('src1', { remaining: 3000 }), 2);
-    expect(Object.values(board.tasks)[0]?.remaining).toBe(3000);
-
-    addTask(board, spec('src1', { remaining: 10 }), 3);
-    expect(Object.values(board.tasks)[0]?.remaining).toBe(3000);
   });
 
   it('raises priority so an urgent condition is not lost', () => {
@@ -108,6 +95,76 @@ describe('leasing', () => {
     addTask(board, spec('src1', { priority: 0 }), 1);
 
     expect(leaseTask(board, 'Bob', {}, 1)?.targetId).toBe('ctrl');
+  });
+
+  it('does not reset a held task when the planner re-adds it each tick', () => {
+    // The planner feeds the same spec every tick. Re-adding must be a no-op on
+    // the live task: it must not create a second task, must not steal the lease,
+    // and must not move the identity the holder is tracking.
+    const board = emptyBoard();
+    const first = addTask(board, spec('src1'), 1);
+    leaseTask(board, 'Bob', {}, 1);
+
+    for (let tick = 2; tick <= 40; tick += 1) {
+      const again = addTask(board, spec('src1'), tick);
+      expect(again.id).toBe(first.id);
+    }
+
+    expect(boardSummary(board)).toEqual({ total: 1, leased: 1, free: 0 });
+    expect(board.tasks[first.id]?.leasedBy).toBe('Bob');
+  });
+
+  it('renews the lease of a creep that is still asking for work', () => {
+    // The bug this pins: `leaseTask` used to return the held task WITHOUT
+    // extending its deadline, so a creep that worked continuously still lost its
+    // lease every DEFAULT_LEASE_TICKS. It only recovered because the next tick
+    // re-leased the same task, which is churn — and with a second creep in the
+    // room, work that was being done could be handed to someone else.
+    const board = emptyBoard();
+    addTask(board, spec('src1'), 1);
+
+    const start = 1;
+    leaseTask(board, 'Bob', {}, start);
+    const firstDeadline = board.tasks['t1']?.leasedUntil ?? 0;
+
+    // A creep asks for work every tick, as the colony does.
+    const later = start + DEFAULT_LEASE_TICKS * 3;
+    leaseTask(board, 'Bob', {}, later);
+
+    const renewed = board.tasks['t1']?.leasedUntil ?? 0;
+    expect(renewed).toBeGreaterThan(firstDeadline);
+    expect(renewed).toBe(later + DEFAULT_LEASE_TICKS);
+  });
+
+  it('keeps an actively working creep leased indefinitely', () => {
+    // The end-to-end consequence: as long as the creep keeps asking, no tick
+    // should ever reclaim its lease, however long the work takes.
+    const board = emptyBoard();
+    addTask(board, spec('src1'), 1);
+    leaseTask(board, 'Bob', {}, 1);
+
+    let now = 1;
+    for (let tick = 0; tick < 500; tick += 1) {
+      now += 1;
+      // Colony order: reap first, then the creep asks for work again.
+      reapExpired(board, now, { Bob: true });
+      leaseTask(board, 'Bob', {}, now);
+    }
+
+    expect(board.tasks['t1']?.leasedBy).toBe('Bob');
+  });
+
+  it('still reaps a lease whose holder stopped asking for work', () => {
+    // The renewal must not defeat the deadline entirely: a creep that is stuck
+    // and no longer requesting work has to lose the task so someone else can
+    // take it.
+    const board = emptyBoard();
+    addTask(board, spec('src1'), 1);
+    leaseTask(board, 'Bob', {}, 1);
+
+    // No further leaseTask calls; time passes.
+    const after = 1 + DEFAULT_LEASE_TICKS + 1;
+    expect(reapExpired(board, after, { Bob: true })).toBe(1);
   });
 
   it('resolves ties deterministically so replay is reproducible', () => {
@@ -179,15 +236,6 @@ describe('lease recovery', () => {
     leaseTask(board, 'Bob', {}, 1);
 
     expect(reapExpired(board, 1 + DEFAULT_LEASE_TICKS + 1, { Bob: true })).toBe(1);
-  });
-
-  it('renews a lease so active work is not reaped', () => {
-    const board = emptyBoard();
-    addTask(board, spec('src1'), 1);
-    leaseTask(board, 'Bob', {}, 1);
-
-    renewLease(board, 'Bob', 40);
-    expect(reapExpired(board, 1 + DEFAULT_LEASE_TICKS + 1, { Bob: true })).toBe(0);
   });
 
   it('returns a lease to the pool on explicit release', () => {
