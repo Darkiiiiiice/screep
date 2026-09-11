@@ -43,6 +43,9 @@ function creepAt(name: string, role: string, x: number, y: number, room: string)
     y,
     room,
     energy: 0,
+    // Recorded snapshots carry no TTL, and the replay must not invent one:
+    // preemption off unknown data would be a guess.
+    ticksToLive: null,
     carryCapacity: 50,
     parts: { work: 1, carry: 1, move: 1 },
     taskId: null,

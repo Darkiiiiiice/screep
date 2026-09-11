@@ -104,11 +104,14 @@ async function buildWorld() {
 
   await server.world.addRoom('W0N1');
   await server.world.setTerrain('W0N1', terrain);
-  // RCL 2 from the start, deliberately: that is the level where the build paths
-  // (extensions, containers, then the ESTABLISHED transition) actually run. An
-  // earlier version started at RCL 1, where the container check passed VACUOUSLY
-  // — no container is even buildable below level 2, so there was nothing to
-  // inspect and the check proved nothing.
+  // The controller is seeded here at level 2 — but the seeding does not stick:
+  // `addBot` unconditionally rewrites it to level 1 (screeps-server-mockup
+  // world.js: `$set: { ..., level: 1, ... }`), and addBot runs after this. So
+  // every run actually starts at RCL 1 and climbs mid-run. That is fine —
+  // deliberately kept, in fact: starting from nothing exercises the startup
+  // order (which is where the unknown-role bug lived), the level-up, and the
+  // RCL 2 build paths in one run, and the 600-tick default reaches RCL 2 well
+  // before its end so the container checks are not vacuous.
   //
   // progressTotal is large so progress never resets on a level-up, which keeps
   // the throughput assertion comparable across the run.
@@ -260,7 +263,10 @@ server.stop();
 const checks = [];
 
 function check(name, ok, detail) {
-  checks.push({ name, ok, detail });
+  // The detail rides along on PASS too: a passing bound without its measured
+  // value cannot be re-checked against a tighter limit later, and a number that
+  // only appears on failure hides how much headroom the pass actually had.
+  checks.push({ name, ok, detail: detail ?? '' });
 }
 
 const last = samples.at(-1);
@@ -417,6 +423,12 @@ if (first && last) {
         samples.slice(-200).flatMap((s) => s.creeps.map((c) => c.name)),
       );
       const newNamesLate = [...lateNames].filter((n) => !earlyNames.has(n));
+      // "Death actually happened" needs its own proof: new names late in the run
+      // can also come from demand growth (a second harvester for a second
+      // source), which is not a lifecycle. A gen-1 name that is GONE by the end
+      // is the evidence a death occurred at all.
+      const lastNameSet = new Set(samples.at(-1)?.creeps.map((c) => c.name) ?? []);
+      const vanished = [...earlyNames].filter((n) => !lastNameSet.has(n));
       // Population > 0 is too weak a floor: the injected reserve bug left ONE
       // creep alive (an upgrader idling for want of energy) and still passed,
       // while throughput collapsed to 0.267/tick and progress fell to 534 vs
@@ -467,8 +479,8 @@ if (first && last) {
 
       check(
         'colony survived a full creep lifecycle (death -> respawn, no sustained gap)',
-        newNamesLate.length > 0 && longest <= HARVESTER_GAP_LIMIT,
-        detail,
+        vanished.length > 0 && newNamesLate.length > 0 && longest <= HARVESTER_GAP_LIMIT,
+        `${detail}; deaths=${String(vanished.length)}, late replacements=${String(newNamesLate.length)}`,
       );
     }
   }
@@ -481,7 +493,7 @@ if (first && last) {
 
 out.log('');
 for (const c of checks) {
-  out.log(`  ${c.ok ? 'PASS' : 'FAIL'}  ${c.name}${c.ok || !c.detail ? '' : ` — ${c.detail}`}`);
+  out.log(`  ${c.ok ? 'PASS' : 'FAIL'}  ${c.name}${c.detail ? ` — ${c.detail}` : ''}`);
 }
 
 out.log('');

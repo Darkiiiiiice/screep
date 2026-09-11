@@ -58,6 +58,15 @@ export interface CreepView {
   energy: number;
   /** Total carry capacity, i.e. the upper bound on `energy`. */
   carryCapacity: number;
+  /**
+   * Ticks of life left, or null when unknown (a creep we did not spawn).
+   *
+   * Exposed so the spawn planner can treat a creep that is about to die of old
+   * age as already gone and start its replacement BEFORE the income stops —
+   * measured live, a harvester that dies first and is replaced after costs its
+   * full spawn duration of zero income every generation.
+   */
+  ticksToLive: number | null;
   /** Body part counts, e.g. `{ work: 2, carry: 1, move: 1 }`. */
   parts: Partial<Record<string, number>>;
   /** Task currently leased to this creep, if any. */

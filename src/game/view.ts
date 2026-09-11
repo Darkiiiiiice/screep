@@ -169,6 +169,9 @@ function viewCreep(creep: Creep): CreepView {
     // count toward any role's quota (see populationByRole) and must not be
     // commanded (decide falls through to null).
     role: (creep.memory.role as string | undefined) ?? null,
+    // A foreign/inert creep may carry no TTL at all; unknown must not read as
+    // "about to die".
+    ticksToLive: typeof creep.ticksToLive === 'number' ? creep.ticksToLive : null,
     x: creep.pos.x,
     y: creep.pos.y,
     room: creep.pos.roomName,

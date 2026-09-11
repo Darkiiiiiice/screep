@@ -11,6 +11,7 @@ function creep(overrides: Partial<CreepView> = {}): CreepView {
     room: 'W1N1',
     energy: 0,
     carryCapacity: 50,
+    ticksToLive: null,
     parts: { work: 2, carry: 1, move: 1 },
     taskId: null,
     ...overrides,
@@ -94,6 +95,7 @@ function roomWithIncome(overrides: Partial<RoomView> = {}): RoomView {
       {
         name: 'miner',
         role: 'harvester',
+        ticksToLive: null,
         x: 24,
         y: 6,
         room: base.name,
