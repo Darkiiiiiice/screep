@@ -58,21 +58,6 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 
 由 `eslint.config.mjs` 硬性拦截：`Game`/`Memory`/`RawMemory`/`PathFinder`/`InterShardMemory` 在任意 `.ts` 中都是受限全局，`src/main.ts` 与 `scripts/**` 例外（唯一允许触碰引擎之处）。该守卫在重写后依然生效。
 
-## 架构不变式
-
-> **`src/domain/**` 永不 import 引擎全局，也不 import 引擎感知层（`game/`、`kernel/`、`colony/`）。**
-
-没有本地引擎测试环境，这条是唯一的安全网：绕过它，任何改动都只能靠线上真实世界试错，每次消耗部署配额并可能赔掉 creep。由 `eslint.config.mjs` 硬性拦截，并有反例测试确认规则会触发。
-
-分层：
-
-| 目录 | 性质 |
-|---|---|
-| `src/domain/**` | **纯逻辑**，可单测，禁 I/O 与引擎访问 |
-| `src/kernel/**` | 引擎感知的基础设施（tick 管线、CPU 预算、缓存、日志） |
-| `src/game/**` | 引擎适配层，唯一触碰 `Game`/`Room`/`Creep` 之处 |
-| `src/colony/**` | 组合层，把 domain 决策接到适配层 |
-
 ## 工具链说明（踩过的坑）
 
 - **TypeScript pin 在 `~6.0.3`**：`typescript-eslint@8.70.0` 的 peer 是 TS `>=4.8.4 <6.1.0`，且尚无 v9；TS latest 是 7.0.2。esbuild 负责转译，tsc 只做类型检查，故不值得为 TS 7 承担 lint 生态缺失的风险。
