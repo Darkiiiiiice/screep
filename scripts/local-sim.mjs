@@ -200,6 +200,10 @@ const bot = await server.world.addBot({
   modules: { main: bundleSource },
 });
 
+// Named once, shared by the world builder and the frozen check's exemption, so
+// the two can never drift apart.
+const BLOCKER_NAME = 'inert-blocker';
+
 // An inert creep parked in the spawn's approach corridor.
 //
 // This is not decoration: the live failure needed exactly this — an immobile
@@ -289,6 +293,14 @@ if (first && last) {
   //    creeps directly instead of via a stalled controller.
   const frozen = [];
   for (const creep of last.creeps) {
+    // The fixture's own obstacle is exempt. Before the unknown-role fix it was
+    // DEFAULTED to 'harvester', so the AI commanded it around the room (a
+    // move-only body moves 1 tile/tick) and it passed this check by moving —
+    // which quietly broke the "immobile obstacle" premise this whole world was
+    // built on. With the fix it truly never acts, and a check that read
+    // "no creep is frozen" started flagging it. Its stasis is the design, so the
+    // fixture excludes the one name it created for exactly that purpose.
+    if (creep.name === BLOCKER_NAME) continue;
     const history = samples
       .map((s) => s.creeps.find((c) => c.name === creep.name))
       .filter((c) => c !== undefined);
