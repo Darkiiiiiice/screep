@@ -12,6 +12,7 @@
  * therefore not free even when energy looks plentiful.
  */
 import type { ColonyState, Role, RoomView } from './types';
+import { needsRepair } from './build';
 
 export interface RoleDemand {
   role: Role;
@@ -131,11 +132,21 @@ export function roleDemand(room: RoomView, state: ColonyState): RoleDemand[] {
   }
 
   // Builders exist only when there is something to build. Spawning one against
-  // an empty site list is pure waste.
+  // an empty site list is pure waste — but decayed containers are also work:
+  // a container that reaches zero hits is destroyed and the room drops back to
+  // BOOTSTRAP, so maintenance needs a hand even when nothing is under
+  // construction.
+  const repairCount = room.stores.filter((s) => needsRepair(s)).length;
+  const workCount = siteCount + repairCount;
   demands.push({
     role: 'builder',
-    count: siteCount > 0 ? 1 : 0,
-    reason: siteCount > 0 ? `${String(siteCount)} site(s)` : 'no sites',
+    count: workCount > 0 ? 1 : 0,
+    reason:
+      siteCount > 0
+        ? `${String(siteCount)} site(s)`
+        : repairCount > 0
+          ? `${String(repairCount)} structure(s) decayed`
+          : 'no sites',
   });
 
   // No defender is requested. Observed live: a transient hostile caused one to

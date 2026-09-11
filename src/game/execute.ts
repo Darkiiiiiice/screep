@@ -136,6 +136,8 @@ export function execute(intent: Intent): number {
       return creep.build(target as ConstructionSite);
     case 'upgrade':
       return creep.upgradeController(target as StructureController);
+    case 'repair':
+      return creep.repair(target as StructureContainer);
   }
 }
 

@@ -17,7 +17,7 @@
 import type { Role } from './types';
 
 /** What kind of work a task represents. */
-export type TaskKind = 'harvest' | 'deliver' | 'upgrade' | 'build';
+export type TaskKind = 'harvest' | 'deliver' | 'upgrade' | 'build' | 'repair';
 
 export interface Task {
   id: string;

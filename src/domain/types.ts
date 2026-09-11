@@ -96,6 +96,15 @@ export interface StoreView {
   energy: number;
   /** `undefined` for structures that accept unlimited energy. */
   energyCapacity: number | undefined;
+  /**
+   * Current and maximum hit points.
+   *
+   * Every engine structure carries them, so they are filled for all stores
+   * uniformly. The decay-prone ones (containers) are what the planner reads;
+   * everything else holds a steady value and never triggers repair.
+   */
+  hits: number;
+  hitsMax: number;
 }
 
 export interface ControllerView {
@@ -183,6 +192,14 @@ export type Intent =
   | { kind: 'withdraw'; creep: string; targetId: string; amount: number | undefined }
   | { kind: 'build'; creep: string; targetId: string }
   | { kind: 'upgrade'; creep: string; targetId: string }
+  /**
+   * Restore hit points on a damaged structure.
+   *
+   * Containers are the one decay-prone structure the colony builds; a decayed
+   * one reverts the room to BOOTSTRAP, so maintenance is load-bearing. The
+   * engine's repair range is 3, same as build.
+   */
+  | { kind: 'repair'; creep: string; targetId: string }
   /**
    * Move into `range` of a target.
    *

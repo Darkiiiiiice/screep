@@ -37,6 +37,8 @@ function structure(type: string, i = 1): StoreView {
     room: 'W1N1',
     energy: 0,
     energyCapacity: 50,
+    hits: 250000,
+    hitsMax: 250000,
   };
 }
 

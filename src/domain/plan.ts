@@ -16,6 +16,7 @@
  * re-created" set must not delete a neighbouring room's work.
  */
 import type { ColonyState, RoomView } from './types';
+import { needsRepair } from './build';
 import { addTask, type TaskBoard } from './tasks';
 
 export interface PlanResult {
@@ -108,6 +109,24 @@ export function planTasks(
       const task = addTask(
         board,
         { kind: 'deliver', targetId: store.id, room: room.name, role: 'hauler' },
+        now,
+      );
+      want(task.key);
+    }
+  }
+
+  // Maintenance. A container below the repair threshold is a ticking loss: when
+  // its hits reach zero the structure is gone and the room drops back to
+  // BOOTSTRAP (the container is what the state machine reads), so this is not
+  // cosmetic upkeep. Same state gate as deliveries — in BOOTSTRAP there is no
+  // container economy to maintain, and the room's first energy must buy
+  // harvesters, not a builder that walks to a buffer nobody uses yet.
+  if (state !== 'BOOTSTRAP') {
+    for (const store of room.stores) {
+      if (!needsRepair(store)) continue;
+      const task = addTask(
+        board,
+        { kind: 'repair', targetId: store.id, room: room.name, role: 'builder' },
         now,
       );
       want(task.key);

@@ -45,6 +45,8 @@ function storeView(overrides: Partial<StoreView> = {}): StoreView {
     room: 'W1N1',
     energy: 300,
     energyCapacity: 300,
+    hits: 250000,
+    hitsMax: 250000,
     ...overrides,
   };
 }

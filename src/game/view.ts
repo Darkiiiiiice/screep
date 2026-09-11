@@ -92,6 +92,10 @@ function viewStore(structure: StorableStructure): StoreView {
     room: structure.pos.roomName,
     energy: energyOf(structure),
     energyCapacity: energyCapacityOf(structure),
+    // Every engine structure carries hits; the planner reads containers (the
+    // one decay-prone store the colony builds) and ignores the rest.
+    hits: structure.hits,
+    hitsMax: structure.hitsMax,
   };
 }
 

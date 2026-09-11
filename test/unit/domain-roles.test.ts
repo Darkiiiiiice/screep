@@ -22,8 +22,28 @@ function source(id: string, x: number, y: number, energy = 3000): SourceView {
   return { id, x, y, room: 'W1N1', energy, ticksToRegeneration: 0 };
 }
 
-function store(id: string, type: string, x: number, y: number, energy: number, cap?: number): StoreView {
-  return { id, type, x, y, room: 'W1N1', energy, energyCapacity: cap };
+function store(
+  id: string,
+  type: string,
+  x: number,
+  y: number,
+  energy: number,
+  cap?: number,
+  hits?: number,
+): StoreView {
+  return {
+    id,
+    type,
+    x,
+    y,
+    room: 'W1N1',
+    energy,
+    energyCapacity: cap,
+    // Full hits unless the test asks for decay; an absent value must read as
+    // healthy (see needsRepair), not as damaged.
+    hits: hits ?? 250000,
+    hitsMax: 250000,
+  };
 }
 
 function room(overrides: Partial<RoomView> = {}): RoomView {
@@ -578,5 +598,75 @@ describe('threat withdrawal', () => {
     const withHostile = room({ hostiles: [{ id: 'h1', x: 10, y: 10 }] });
     const intent = decide(creep({ role: 'harvester', x: 24, y: 5, energy: 0 }), null, withHostile);
     expect(intent?.kind).toBe('harvest');
+  });
+});
+
+describe('builder maintenance', () => {
+  it('repairs a decayed container when there is no site to build', () => {
+    const view = room({
+      stores: [store('cont1', 'container', 20, 20, 500, 2000, 100_000)],
+    });
+    const intent = decide(creep({ role: 'builder', energy: 50, x: 21, y: 20 }), null, view);
+
+    expect(intent).toMatchObject({ kind: 'repair', targetId: 'cont1' });
+  });
+
+  it('leaves a healthy container alone and fetches instead', () => {
+    const view = room({
+      stores: [store('cont1', 'container', 20, 20, 500, 2000)],
+    });
+    const intent = decide(creep({ role: 'builder', energy: 0, x: 21, y: 20 }), null, view);
+    expect(intent?.kind).toBe('withdraw');
+  });
+
+  it('builds first: a site outranks maintenance', () => {
+    // A site is a one-time capacity unlock (extensions raise the room's storage
+    // ceiling); a container at half hits still buffers. Both present → build.
+    const view = room({
+      constructionSites: [
+        { id: 'site1', x: 30, y: 30, room: 'W1N1', structureType: 'extension', progress: 0, progressTotal: 3000 },
+      ],
+      stores: [store('cont1', 'container', 20, 20, 500, 2000, 100_000)],
+    });
+    const intent = decide(creep({ role: 'builder', energy: 50, x: 30, y: 31 }), null, view);
+    expect(intent?.kind).toBe('build');
+  });
+
+  it('interrupts building for a critically decayed container', () => {
+    // The container below CRITICAL_REPAIR_FRACTION has ~6,250 ticks of life left
+    // at a builder's pace, and a five-extension program takes ~2,000 — building
+    // through it would let the container die and the room drop back to
+    // BOOTSTRAP. Above the critical line, building still wins.
+    const critical = store('cont1', 'container', 20, 20, 500, 2000, 10_000);
+    const view = room({
+      constructionSites: [
+        { id: 'site1', x: 30, y: 30, room: 'W1N1', structureType: 'extension', progress: 0, progressTotal: 3000 },
+      ],
+      stores: [critical],
+    });
+    const intent = decide(creep({ role: 'builder', energy: 50, x: 30, y: 31 }), null, view);
+    // The builder stands at the site and the container is 11 tiles away, so the
+    // correct intent is TRAVEL toward the container, not a build at the site.
+    expect(intent).toMatchObject({ kind: 'approach', targetId: 'cont1', range: 3 });
+
+    // Same geometry, but the container is merely "worn" (40%): building wins.
+    const worn = store('cont1', 'container', 20, 20, 500, 2000, 100_000);
+    const calm = room({
+      constructionSites: [
+        { id: 'site1', x: 30, y: 30, room: 'W1N1', structureType: 'extension', progress: 0, progressTotal: 3000 },
+      ],
+      stores: [worn],
+    });
+    const building = decide(creep({ role: 'builder', energy: 50, x: 30, y: 31 }), null, calm);
+    expect(building?.kind).toBe('build');
+  });
+
+  it('approaches a repair target out of reach instead of teleporting the action', () => {
+    const view = room({
+      stores: [store('cont1', 'container', 30, 30, 500, 2000, 10_000)],
+    });
+    const intent = decide(creep({ role: 'builder', energy: 50, x: 21, y: 20 }), null, view);
+
+    expect(intent).toMatchObject({ kind: 'approach', targetId: 'cont1', range: 3 });
   });
 });

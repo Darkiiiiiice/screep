@@ -22,6 +22,7 @@
  */
 import type { CreepView, Intent, RoomView, SourceView, StoreView } from './types';
 import type { Task } from './tasks';
+import { CRITICAL_REPAIR_FRACTION, needsRepair } from './build';
 
 /** Reach of each action, in tiles (Chebyshev). */
 const REACH: Record<string, number> = {
@@ -30,6 +31,8 @@ const REACH: Record<string, number> = {
   withdraw: 1,
   build: 3,
   upgrade: 3,
+  // The engine's repair range is 3, same as build's.
+  repair: 3,
 };
 
 /** Chebyshev distance — the number of tiles to close on a target. */
@@ -47,7 +50,7 @@ interface Positioned extends Coords {
   id: string;
 }
 
-type ActionKind = 'harvest' | 'transfer' | 'withdraw' | 'build' | 'upgrade';
+type ActionKind = 'harvest' | 'transfer' | 'withdraw' | 'build' | 'upgrade' | 'repair';
 
 /** True when the creep could act on this target without moving. */
 function inReach(creep: CreepView, target: Coords, kind: ActionKind): boolean {
@@ -74,6 +77,7 @@ function actOrApproach(creep: CreepView, target: Positioned, kind: ActionKind, a
     case 'harvest':
     case 'build':
     case 'upgrade':
+    case 'repair':
       return { kind, creep: creep.name, targetId: target.id };
   }
 }
@@ -92,6 +96,7 @@ function act(creep: CreepView, target: Positioned, kind: ActionKind): Intent {
     case 'harvest':
     case 'build':
     case 'upgrade':
+    case 'repair':
       return { kind, creep: creep.name, targetId: target.id };
   }
 }
@@ -410,11 +415,28 @@ function decideUpgrader(creep: CreepView, room: RoomView): Intent | null {
   return actOrApproach(creep, controller, 'upgrade');
 }
 
-/** Builder: fetches energy, then applies it to a construction site. */
+/**
+ * Builder: fetches energy, then applies it to a construction site.
+ *
+ * With no sites the builder is the colony's maintenance hand: containers are
+ * the one decay-prone structure and losing one reverts the room to BOOTSTRAP,
+ * so an idle builder repairs the most worn one. Sites outrank repair — a site
+ * is a one-time capacity unlock while a container at half hits still works.
+ */
 function decideBuilder(creep: CreepView, task: Task | null, room: RoomView): Intent | null {
   const assigned =
     task?.kind === 'build' ? room.constructionSites.find((s) => s.id === task.targetId) : undefined;
-  const site = assigned ?? nearest(creep, room.constructionSites);
+  const candidates = assigned ?? nearest(creep, room.constructionSites);
+  // Repair needs a target even without a leased task: at RCL 2 there may be no
+  // builder when the container crosses the threshold, and the newly spawned one
+  // only meets its task a tick later.
+  const decayed = room.stores.filter((s) => needsRepair(s));
+  // A critically worn container outranks ANY site, so it pre-empts `candidates`
+  // (nulled below) rather than competing in reach order; a merely worn one only
+  // matters when there is nothing to build.
+  const critical = decayed.find((s) => s.hits < s.hitsMax * CRITICAL_REPAIR_FRACTION);
+  const repair = critical ?? (candidates ? null : decayed[0]);
+  const site = critical ? null : candidates;
   const supply = energySupply(creep, room);
 
   const recovery = recoverIncome(creep, room);
@@ -423,9 +445,13 @@ function decideBuilder(creep: CreepView, task: Task | null, room: RoomView): Int
   if (creep.energy > 0 && site && inReach(creep, site, 'build')) {
     return act(creep, site, 'build');
   }
+  if (creep.energy > 0 && repair && inReach(creep, repair, 'repair')) {
+    return act(creep, repair, 'repair');
+  }
   if (hasSpace(creep) && supply?.local) return act(creep, supply.target, supply.kind);
 
   if (creep.energy > 0 && site) return actOrApproach(creep, site, 'build');
+  if (creep.energy > 0 && repair) return actOrApproach(creep, repair, 'repair');
   if (!supply) return null;
   return actOrApproach(creep, supply.target, supply.kind);
 }

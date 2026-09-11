@@ -3,7 +3,7 @@ import { deriveState, energyToReach, UPGRADE_COST } from '@/domain/state';
 import type { RoomView, StoreView } from '@/domain/types';
 
 function store(type: string): StoreView {
-  return { id: `${type}1`, type, x: 10, y: 10, room: 'W1N1', energy: 0, energyCapacity: 1000 };
+  return { id: `${type}1`, type, x: 10, y: 10, room: 'W1N1', energy: 0, energyCapacity: 1000, hits: 250000, hitsMax: 250000 };
 }
 
 function room(opts: { level: number; stores?: StoreView[]; my?: boolean }): RoomView {

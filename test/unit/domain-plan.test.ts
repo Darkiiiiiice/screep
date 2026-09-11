@@ -28,6 +28,9 @@ function store(overrides: Partial<StoreView> = {}): StoreView {
     room: 'W1N1',
     energy: 0,
     energyCapacity: 2000,
+    // Healthy by default so store-based tests do not accidentally trip repair.
+    hits: 250000,
+    hitsMax: 250000,
     ...overrides,
   };
 }
@@ -247,5 +250,51 @@ describe('tier-dependent planning', () => {
     const board = emptyBoard();
     planTasks(board, room(), 'ESTABLISHED', 1);
     expect(Object.values(board.tasks).some((t) => t.kind === 'deliver')).toBe(true);
+  });
+});
+
+describe('repair planning', () => {
+  it('plans a repair task for a container below the threshold', () => {
+    const board = emptyBoard();
+    const damaged = store({ hits: 124_999 });
+    planTasks(board, room({ stores: [damaged] }), 'ESTABLISHED', 1);
+    const repair = Object.values(board.tasks).find((t) => t.kind === 'repair');
+    expect(repair?.targetId).toBe(damaged.id);
+    expect(repair?.role).toBe('builder');
+  });
+
+  it('plans no repair while a container is at the threshold', () => {
+    const board = emptyBoard();
+    planTasks(board, room({ stores: [store({ hits: 125_000 })] }), 'ESTABLISHED', 1);
+    expect(Object.values(board.tasks).some((t) => t.kind === 'repair')).toBe(false);
+  });
+
+  it('stops planning repair once the container is restored', () => {
+    const board = emptyBoard();
+    planTasks(board, room({ stores: [store({ hits: 10_000 })] }), 'ESTABLISHED', 1);
+    expect(Object.values(board.tasks).some((t) => t.kind === 'repair')).toBe(true);
+    // Next tick, fully repaired: the planner is the authority, so the task must
+    // leave the board rather than keep being offered to a builder.
+    planTasks(board, room({ stores: [store()] }), 'ESTABLISHED', 2);
+    expect(Object.values(board.tasks).some((t) => t.kind === 'repair')).toBe(false);
+  });
+
+  it('plans no repair in BOOTSTRAP, where the first energy buys harvesters', () => {
+    const board = emptyBoard();
+    planTasks(board, room({ stores: [store({ hits: 10_000 })] }), 'BOOTSTRAP', 1);
+    expect(Object.values(board.tasks).some((t) => t.kind === 'repair')).toBe(false);
+  });
+
+  it('never plans repair off unknown hits', () => {
+    // hits arrives from recorded snapshots; a replayed room must not spawn a
+    // builder to chase decay state the recording cannot confirm.
+    const board = emptyBoard();
+    planTasks(
+      board,
+      room({ stores: [store({ hits: undefined as unknown as number })] }),
+      'ESTABLISHED',
+      1,
+    );
+    expect(Object.values(board.tasks).some((t) => t.kind === 'repair')).toBe(false);
   });
 });

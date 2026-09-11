@@ -243,7 +243,7 @@ if (!snapshot) {
     ],
     [
       'the colony reported its room state',
-      colonyLogs.some((l) => l.includes('BOOTSTRAP')),
+      colonyLogs.some((l) => l.includes('BOOTSTRAP') || l.includes('ESTABLISHED')),
       colonyLogs.at(-1) ?? '(no room logs)',
     ],
   ];

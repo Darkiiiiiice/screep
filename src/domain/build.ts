@@ -11,7 +11,7 @@
  * to go; RCL 2's five extensions raise the ceiling to 550, which is 83% more
  * energy the room can hold and therefore convert.
  */
-import type { RoomView } from './types';
+import type { RoomView, StoreView } from './types';
 
 /**
  * Structure ceiling by controller level.
@@ -52,6 +52,52 @@ const MAX_LEVEL = 8;
  * structures.
  */
 const MAX_SITES_PER_TICK = 2;
+
+/**
+ * Repair a structure once its hits fall below this fraction of their maximum.
+ *
+ * The only structures the colony builds that decay on their own are containers:
+ * 5,000 hits lost every 500 ticks in an owned room (10/tick, engine `tick.js`),
+ * against 250,000 max, so a full life is 25,000 ticks (~28 h wall-clock). Losing
+ * one reverts the room to BOOTSTRAP — the container is what the state machine
+ * reads — so decay is not cosmetic.
+ *
+ * Half is the compromise between energy and attention: repairing costs 0.01
+ * energy per hit (`REPAIR_COST`), so restoring half a container is ~1,250
+ * energy (~1.4 h of measured income), and from the trigger point the remaining
+ * decay time is 12,500 ticks — far more than a builder needs to cross the room.
+ * Repairing continuously would spend the same energy per hit while keeping a
+ * builder busy every trip; waiting until near-zero risks a decay event landing
+ * the final blow before help arrives.
+ */
+export const REPAIR_HITS_FRACTION = 0.5;
+
+/**
+ * True when a store has decayed far enough to be worth a repair trip.
+ *
+ * Only containers are checked: extensions, spawns and the like have `hits` but
+ * do not decay on their own, so maintaining them repairs damage that does not
+ * happen. An absent `hits` (older recorded snapshots) reads as healthy — an
+ * unknown value must not spawn a builder to chase a guess.
+ */
+export function needsRepair(store: StoreView): boolean {
+  if (store.type !== 'container') return false;
+  if (store.hits === undefined || store.hitsMax === undefined) return false;
+  return store.hits < store.hitsMax * REPAIR_HITS_FRACTION;
+}
+
+/**
+ * Critical decay: the fraction below which maintenance outranks building.
+ *
+ * Building sites and decayed containers both want the builder's hands, and a
+ * five-extension program takes ~2,000 ticks — longer than a container's
+ * remaining life at the repair threshold. Below this fraction the container's
+ * remaining time (~6,250 ticks at a builder's pace) is short enough that
+ * pausing construction is the cheap side of the trade: a finished extension
+ * raises storage, but a container that dies deletes the whole ESTABLISHED
+ * economy it was buffering.
+ */
+export const CRITICAL_REPAIR_FRACTION = 0.25;
 
 export interface StructureWant {
   structureType: string;

@@ -75,6 +75,11 @@ function toStore(object: RawObject): StoreView {
     room: object.room,
     energy: rawEnergy(object),
     energyCapacity: rawCapacity(object),
+    // Recordings may predate the hits capture; absent reads as healthy (see
+    // needsRepair) rather than inventing decay state the recording cannot
+    // confirm.
+    hits: typeof object.hits === 'number' ? object.hits : 250000,
+    hitsMax: typeof object.hitsMax === 'number' ? object.hitsMax : 250000,
   };
 }
 

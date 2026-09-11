@@ -94,21 +94,28 @@ describe('live snapshots', () => {
   );
 
   it.each(snapshots.map((s) => [s.room, s] as const))(
-    'derives BOOTSTRAP for %s at its recorded level',
+    'derives the recorded era state for %s',
     (_room, snapshot) => {
-      // The room was recorded with a fresh spawn, no extensions and no
-      // container — the definition of BOOTSTRAP.
+      // The state must be derivable from the recording alone: the same state
+      // machine runs live, in replays and in the local engine, so any snapshot
+      // has one right answer.
       const view = toRoomView(snapshot);
       const verdict = deriveState(view);
+      const hasContainer = view.stores.some((s) => s.type === 'container');
+      const level = view.controller?.level ?? 0;
 
-      expect(verdict.state).toBe('BOOTSTRAP');
-      expect(verdict.reason).toMatch(/RCL 1/);
+      if (level < 2 || !hasContainer) {
+        expect(verdict.state).toBe('BOOTSTRAP');
+      } else {
+        expect(verdict.state).toBe('ESTABLISHED');
+      }
     },
   );
 });
 
 describe('demand against the real room', () => {
   const snapshot = snapshots[0] as RawSnapshot;
+  const rcl2 = snapshots.at(-1) as RawSnapshot;
 
   it('wants exactly one harvester while energy capacity is still one spawn', () => {
     // The room has two sources, but at RCL 1 the 250 a second harvester costs
@@ -143,6 +150,8 @@ describe('demand against the real room', () => {
           room: base.name,
           energy: 0,
           energyCapacity: 2000,
+          hits: 250000,
+          hitsMax: 250000,
         },
       ],
       controller: base.controller ? { ...base.controller, level: 3 } : null,
@@ -202,6 +211,8 @@ describe('demand against the real room', () => {
           room: view.name,
           energy: 0,
           energyCapacity: 2000,
+          hits: 250000,
+          hitsMax: 250000,
         },
       ],
       spawns: view.spawns.map((s) => ({
@@ -224,6 +235,21 @@ describe('demand against the real room', () => {
 
     expect(view.constructionSites).toHaveLength(0);
     expect(demand.find((d) => d.role === 'builder')?.count).toBe(0);
+  });
+
+  it('wants a builder for decayed containers even without sites', () => {
+    // Maintenance is work: a container that reaches zero hits is destroyed and
+    // the room drops back to BOOTSTRAP. Same number the site rule uses — one
+    // hand is enough for both kinds of structure work. Uses the RCL 2 recording,
+    // which genuinely holds containers.
+    const view = toRoomView(rcl2);
+    const damaged = {
+      ...view,
+      stores: view.stores.map((s) => (s.type === 'container' ? { ...s, hits: 10_000 } : s)),
+    };
+    const demand = roleDemand(damaged, deriveState(damaged).state);
+    expect(view.constructionSites).toHaveLength(0);
+    expect(demand.find((d) => d.role === 'builder')?.count).toBe(1);
   });
 
   it('wants no haulers at BOOTSTRAP, where nothing buffers energy', () => {
