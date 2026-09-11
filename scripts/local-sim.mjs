@@ -24,7 +24,7 @@
  *   npm run sim [-- --ticks 400]
  */
 import { createRequire } from 'node:module';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -56,6 +56,17 @@ const ticksFlag = args.indexOf('--ticks');
 // have reported a vacuous pass — which is worse than no check, because it reads
 // as evidence.
 const TICKS = ticksFlag !== -1 ? Number(args[ticksFlag + 1]) : 600;
+
+/**
+ * Longest tolerated run of ticks with no harvester alive.
+ *
+ * A harvester dying of old age leaves a respawn window: replacement bodies take
+ * 3 ticks per part to build, and the spawn may need ticks to accumulate the
+ * energy first. Measured on the healthy 2000-tick run the longest such window
+ * was ~30 ticks; 60 leaves comfortable headroom while still being far below the
+ * hundreds of ticks a death spiral lasts.
+ */
+const HARVESTER_GAP_LIMIT = 60;
 
 const out = console;
 const bundleSource = readFileSync(BUNDLE, 'utf8');
@@ -168,6 +179,7 @@ async function readState(server, botUser) {
       energy: c.store?.energy ?? 0,
       fatigue: c.fatigue ?? 0,
       user: c.user,
+      ticksToLive: c.ticksToLive ?? null,
     })),
   };
 }
@@ -228,6 +240,10 @@ for (let i = 0; i < TICKS; i += 1) {
   samples.push(await readState(server, bot.id));
 }
 const elapsed = (Date.now() - startedAt) / 1000;
+
+// Decision log, for post-mortem: every tick's own summary line, including the
+// spawn reason. Written before any assertion so a crash still leaves evidence.
+writeFileSync('/tmp/sim-logs.txt', botLogs.join('\n'));
 
 server.stop();
 
@@ -366,7 +382,86 @@ if (first && last) {
     `${String(sieged)}/${String(samples.length)} ticks had a foreign creep in the room`,
   );
 
-  // 9. The AI's own error channel stayed quiet. Console lines are captured, so
+  // 9. Long runs: a full creep lifecycle must pass without a population gap.
+  //
+  // The 600-tick gate cannot see this failure class at all — no creep reaches
+  // its 1500-tick lifespan inside it. The death spiral measured live (harvester
+  // died, first respawn failed, colony mined by hand from zero) only exists
+  // beyond tick 1500. So when the run is long enough to cross a death, assert
+  // the lifecycle actually closed: a creep died, a replacement was born, and the
+  // colony never hit zero creeps after its first spawn.
+  //
+  // "The run crossed a death" is checked against sampled names, not assumed from
+  // the tick count, so a future fixture change can't silently empty this check.
+  if (TICKS >= 1600) {
+    const firstSpawnIdx = samples.findIndex((s) => s.creeps.length > 0);
+    if (firstSpawnIdx === -1) {
+      check('colony survived a full creep lifecycle', false, 'no creep ever spawned');
+    } else {
+      const earlyNames = new Set(
+        samples.slice(firstSpawnIdx, firstSpawnIdx + 400).flatMap((s) => s.creeps.map((c) => c.name)),
+      );
+      const lateNames = new Set(
+        samples.slice(-200).flatMap((s) => s.creeps.map((c) => c.name)),
+      );
+      const newNamesLate = [...lateNames].filter((n) => !earlyNames.has(n));
+      // Population > 0 is too weak a floor: the injected reserve bug left ONE
+      // creep alive (an upgrader idling for want of energy) and still passed,
+      // while throughput collapsed to 0.267/tick and progress fell to 534 vs
+      // 1510. The contract is that INCOME survives, and income is harvesters.
+      //
+      // But "a harvester exists at every tick" is too strict the other way: a
+      // harvester that dies of old age leaves a short window while its
+      // replacement is still being born (a 4-part body takes 12 ticks to spawn,
+      // longer if the spawn has to accumulate energy first). That window is
+      // normal; a death spiral is a SUSTAINED harvesterless gap. So bound the
+      // gap, not the tick.
+      let streak = 0;
+      let longest = 0;
+      let longestStart = -1;
+      let cursor = firstSpawnIdx;
+      for (let i = firstSpawnIdx; i < samples.length; i += 1) {
+        if (samples[i].creeps.some((c) => c.name.includes('harvester'))) {
+          if (streak > longest) {
+            longest = streak;
+            longestStart = cursor;
+          }
+          streak = 0;
+          cursor = i + 1;
+        } else {
+          streak += 1;
+        }
+      }
+      if (streak > longest) {
+        longest = streak;
+        longestStart = cursor;
+      }
+
+      // Full window detail when it exceeds the limit: when it started, what was
+      // alive instead, and what the spawn was holding. Without this the number is
+      // an accusation with no evidence attached.
+      let detail = `longest run with no harvester=${String(longest)} ticks (limit ${String(HARVESTER_GAP_LIMIT)})`;
+      if (longest > HARVESTER_GAP_LIMIT && longestStart >= 0) {
+        const win = samples.slice(longestStart, longestStart + longest);
+        detail += `; window ticks ${String(win[0].time)}-${String(win[win.length - 1].time)}`;
+        detail += `, roles inside: ${JSON.stringify(
+          win[win.length - 1].creeps.map((c) => c.name.split('-')[0]),
+        )}`;
+        detail += `, spawn energy ${String(win[0].spawnEnergy)}->${String(win[win.length - 1].spawnEnergy)}`;
+        detail += `, controller ${String(win[0].controllerProgress)}->${String(win[win.length - 1].controllerProgress)}`;
+        writeFileSync('/tmp/sim-window.json', JSON.stringify(win, null, 2));
+        detail += ' (window dumped to /tmp/sim-window.json)';
+      }
+
+      check(
+        'colony survived a full creep lifecycle (death -> respawn, no sustained gap)',
+        newNamesLate.length > 0 && longest <= HARVESTER_GAP_LIMIT,
+        detail,
+      );
+    }
+  }
+
+  // 10. The AI's own error channel stayed quiet. Console lines are captured, so
   //    an error flood is visible as repeated `[error]` lines.
   const errorLines = botLogs.filter((l) => l.includes('[error]'));
   check('no error flood from the AI', errorLines.length <= 3, `${String(errorLines.length)} error lines`);

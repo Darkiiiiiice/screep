@@ -119,7 +119,14 @@ export function tickRoom(view: RoomView, room: Room): RoomTickResult {
   //    cost a creep its tick — it can still be given an energy decision.
   for (const creep of view.creeps) {
     const task = guard(
-      () => leaseTask(b, creep.name, { roles: TASK_ROLES[creep.role] ?? [] }, now),
+      // An unknown-role creep takes no tasks: it is nobody's worker.
+      () =>
+        leaseTask(
+          b,
+          creep.name,
+          { roles: creep.role ? (TASK_ROLES[creep.role] ?? []) : [] },
+          now,
+        ),
       `lease ${creep.name}`,
     );
     const intent = decide(creep, task ?? null, view);

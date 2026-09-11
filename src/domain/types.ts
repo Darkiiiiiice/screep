@@ -39,8 +39,17 @@ export type Body = BodyPart[];
 export interface CreepView {
   /** Stable name — the identity used in Memory and in task leases. */
   name: string;
-  /** Role assigned at spawn time. Fixed for the creep's lifetime. */
-  role: string;
+  /**
+   * Role assigned at spawn time, read back from the creep's memory.
+   *
+   * Null when unknown: a creep whose memory was lost (or one we did not spawn)
+   * must NOT default to any productive role. An earlier default of 'harvester'
+   * made an inert foreign creep count as income capacity, which zeroed the
+   * harvester gap at BOOTSTRAP — the colony then spent its first 450 ticks
+   * spawning upgraders while income ran at 1 energy/tick on self-mining
+   * consumers, and it survived only because upgraders happen to have WORK parts.
+   */
+  role: string | null;
   /** Position, kept as raw coordinates so no RoomPosition crosses the port. */
   x: number;
   y: number;

@@ -73,6 +73,12 @@ export function populationByRole(view: RoomView): Partial<Record<string, number>
   const counts: Partial<Record<string, number>> = {};
 
   for (const creep of view.creeps) {
+    // A creep with no known role is not capacity for anything. Counting it would
+    // shrink the gap for whatever role it was mistaken for — measured: an inert
+    // blocker defaulted to 'harvester' zeroed the harvester gap at BOOTSTRAP, so
+    // the colony spent its first 450 ticks spawning upgraders and ran on
+    // self-mined energy at 1/tick until level 2 raised the demand.
+    if (creep.role === null) continue;
     counts[creep.role] = (counts[creep.role] ?? 0) + 1;
   }
 
@@ -123,6 +129,14 @@ export function planSpawns(view: RoomView, state: ColonyState): { intents: Inten
     };
   }
 
+  // The gap list travels with the reason: "queue upgrader" alone cannot answer
+  // "why not a harvester", and that question is exactly what a stalled startup
+  // asks. Living counts are the evidence.
+  const counts = populationByRole(view);
+  const evidence = gaps
+    .map((g) => `${g.role}:${String(counts[g.role] ?? 0)}/${String(g.missing + (counts[g.role] ?? 0))}`)
+    .join(' ');
+
   return {
     intents: [
       {
@@ -134,6 +148,6 @@ export function planSpawns(view: RoomView, state: ColonyState): { intents: Inten
         role: decision.role,
       },
     ],
-    reason: `queue ${decision.role} (${String(decision.cost)}e)`,
+    reason: `queue ${decision.role} (${String(decision.cost)}e) [${evidence}]`,
   };
 }

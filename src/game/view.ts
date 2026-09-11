@@ -165,7 +165,10 @@ function viewCreep(creep: Creep): CreepView {
 
   return {
     name: creep.name,
-    role: creep.memory.role ?? 'harvester',
+    // No productive default: an unknown creep is nobody's worker. It must not
+    // count toward any role's quota (see populationByRole) and must not be
+    // commanded (decide falls through to null).
+    role: (creep.memory.role as string | undefined) ?? null,
     x: creep.pos.x,
     y: creep.pos.y,
     room: creep.pos.roomName,
