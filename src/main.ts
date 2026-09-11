@@ -10,10 +10,12 @@
  *     restarts the runtime, so nothing here may be the sole home of state that
  *     cannot be rebuilt from `Game` / `Memory`.
  *   - An exception that escapes `loop()` aborts the rest of the tick for every
- *     creep we own, so the body is wrapped and failures are contained.
+ *     creep we own, so the body must be wrapped and failures contained.
+ *
+ * The previous implementation (kernel / domain / game / colony layers) was
+ * removed on 2026-09-11 pending a redesign; this is the bare entrypoint the
+ * build pipeline and `npm run smoke` need in order to stay exercisable.
  */
-import { kernelTick } from '@/kernel/tick';
-
 export function loop(): void {
-  kernelTick();
+  // Intentionally empty until the redesign lands.
 }

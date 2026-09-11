@@ -10,7 +10,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src test scripts",
+    "lint": "eslint src scripts",
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "node scripts/deploy.mjs",
@@ -18,9 +18,7 @@
     "stats": "node scripts/stats.mjs",
     "whoami": "node scripts/whoami.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "snapshot": "node scripts/snapshot.mjs",
-    "sim": "bash scripts/sim.sh",
-    "engine": "bash scripts/engine-setup.sh"
+    "snapshot": "node scripts/snapshot.mjs"
   },
   "dependencies": {
     "screeps-api": "^2.1.0"

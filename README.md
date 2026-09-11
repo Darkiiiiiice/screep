@@ -22,9 +22,7 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 | `npm run typecheck` | `tsc --noEmit` 类型门禁（esbuild 只剥类型不检查） | 否 |
 | `npm run lint` | eslint，含**架构守卫**（见下） | 否 |
 | `npm test` | vitest 单测（纯逻辑，毫秒级） | 否 |
-| `npm run smoke` | 跑**真实产物** 200 tick × 2 相（常规 + CPU 高压），验证加载/导出/降级/段写入 | 否 |
-| `npm run engine` | 首次安装本地真实引擎（Node 24 + GCC 15，约数分钟） | 否 |
-| `npm run sim [-- --ticks N]` | **本地真实引擎**跑产物：真实寻路/疲劳/能量流，断言**结果** | 否 |
+| `npm run smoke` | 跑**真实产物** 200 tick × 2 相（常规 + CPU 高压），验证加载/导出/不抛异常 | 否 |
 | `npm run whoami` | 账号身份 + shard 自动识别 + CPU 上限 | 1 次请求 |
 | `npm run deploy [-- --dry-run]` | 上传 `dist/main.js` 到分支 | `POST /api/user/code` |
 | `npm run watch [-- --seconds N]` | WebSocket 流式订阅 console | **否**（不占 HTTP 配额） |
@@ -44,32 +42,19 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 
 两个直接后果：**部署本身是稀缺资源**（`deploy.mjs` 自限 60/天，留余量应对线上故障），**统计走 segment 而非 Memory**。日常观测优先用 `watch`（WebSocket 不占配额）。
 
-## 三层验证（各管一段，不可互相替代）
+## 验证层
 
 | 层 | 验证什么 | 管不到什么 |
 |---|---|---|
-| `npm test`（204 项） | 纯决策逻辑、租约、状态阈值、身体成本 | **物理**：无引擎 |
-| `npm run smoke` | 产物可加载、CPU 降级、段写入、`loop` 导出 | `moveTo` 被桩掉，无寻路 |
-| `npm run sim` | **真实引擎**：寻路、疲劳、能量流、建造、吞吐 | 需先装引擎 |
+| `npm test`（vitest） | 纯决策逻辑 | 物理；无引擎 |
+| `npm run smoke` | 产物可加载、导出 `loop`、两种 CPU 预算下 200 tick 不抛异常 | 游戏行为、寻路、能量流 |
+| `npm run snapshot` | 录制线上房间快照为夹具 | 不验证任何东西，只取数据 |
 
-**为什么三层都要**：本期线上踩到的 bug **全部是物理层失败**（寻路被静止 creep 堵死、缓存路径穿过被占格、spawn 被自家工地围死、3 tick/格身体），
-对前两层结构性不可见。而 `sim` 断言的是**结果而非意图** —— 意图一直是对的。
+## 架构不变式
 
-### 本地引擎为何需要特定工具链
+> **纯逻辑层（`src/domain/**`）永不 import 引擎全局，也不 import 引擎感知层。**
 
-| 组合 | 结果 |
-|---|---|
-| Node 26 + GCC 16 | 失败：V8 13.6 改了 `GetAlignedPointerFromInternalField`；Nan 模块编不过 |
-| Node 24 + GCC 16 | 失败：isolated-vm 自身 timer 模板错配 |
-| **Node 24 + GCC 15** | **成功** |
-
-引擎装在 `.engine/`（独立 Node 24 与 GCC 15），项目本身仍在 Node 26。
-
-### 部署门禁
-
-`npm run deploy` 会**先跑 `npm run sim`**，通过才上传（`SKIP_SIM=1` 可覆盖）。
-动机是实测代价：一次部署消耗 240/天 配额中的 1 次，再以 4 秒/tick 观察数分钟，
-才能发现本地 245 ms/tick 就能复现的 bug。
+由 `eslint.config.mjs` 硬性拦截：`Game`/`Memory`/`RawMemory`/`PathFinder`/`InterShardMemory` 在任意 `.ts` 中都是受限全局，`src/main.ts` 与 `scripts/**` 例外（唯一允许触碰引擎之处）。该守卫在重写后依然生效。
 
 ## 架构不变式
 
@@ -95,47 +80,37 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 
 ## 当前状态
 
-**M0 / M1 / M2 已完成；M3 进行中（RCL 2 已达）。AI 正在线上自主运行。**
+> **2026-09-11：实现层已清空，等待重新设计。**
+>
+> `src/domain`、`src/game`、`src/kernel`、`src/colony`、`test/` 与本地引擎 sim 夹具（`scripts/local-sim.mjs`、`sim.sh`、`engine-setup.sh`）已删除；
+> `src/main.ts` 是空的 `loop()` 占位，保证 build/typecheck/lint/smoke 仍可运行。
+> 下面保留的是**实测事实**（对重新设计仍然有效），不是对现有代码的描述。
 
-- **M0**：五道门禁全绿，token 连通，shard 自动识别，端到端部署已验证。
-- **M1**：内核骨架（tick 管线 / CPU 降级 / heap / cache / Memory 迁移与 GC / 日志节流 / 错误隔离 / profiler / stats 段）。
-- **M2**：任务租约、角色行为、RCL 状态机、spawn 管理。**线上闭环已实测**。
-- **M3（进行中）**：RCL **1→2 已完成**；extension 建造规划已上线并在建。
-
-177 单测 + 真实房间回放 + 15 项 smoke 断言。
-
-### 线上实测（RCL 2，t≈82878430）
+### 线上实测基线（shard3，`W34S1`）
 
 | 指标 | 实测 |
 |---|---|
-| RCL 进度 | 约 1 /tick |
-| 建造进度 | 约 4 /tick |
-| extension | **3000 能量/个**（5 个 = 15,000） |
-| RCL 2→3 | 45,000 能量 |
-| tick 速率 | 约 4 秒/tick |
+| tick 速率 | **约 4 秒/tick**（60 秒约 15 tick） |
+| 房间几何 | controller (43,17) / spawn (24,10) / source (24,5) 与 (5,38) |
+| RCL 1→2 | 200 能量；RCL 2→3 需 45,000 |
+| extension 单价 | **3000 能量/个**（实测） |
+| 容器 | 5000 hits / 500 tick（owned，10 hits/tick）→ 满血约 28 小时 |
+| CPU | `cpuLimit: 20` = 未解锁 |
+| 账号 | 在 `shard3`；`userOverview()` 不可用，判据见 `scripts/lib/shard.mjs` |
 
-**当前瓶颈是收入，不是容量**：建造按 1:1 消耗能量，builder 以 4/tick 吃掉全部收入（总收入 1–2/tick），因此建造期间控制器进度停滞。这是资源竞争的正常表现。
+几条由实测确立、跨实现仍然成立的结构性规则：
 
-**随时间自愈的一项**：线上仍有 4 个 creep 是移动比率修复**之前**出生的（2–3 tick/格）；修复后的比率为 1 tick/格。它们随 1500 tick 寿命自然淘汰。
-
-### 线上实测基线（shard3）
-
-| 指标 | 实测 |
-|---|---|
-| tick 速率 | **约 4 秒/tick** |
-| 房间 | `W34S1`（controller 43,17 / spawn 24,10 / 2 sources） |
-| 移速 | 约 2 tick/格 |
-
-两个由实测发现并修复的问题值得记住：
-
-1. **装满再移动**。角色原本「一有能量就出发」，harvester 采 4 能量走 5 格 —— 控制器进度长期为 0。修复后吞吐提升约 10 倍。
-2. **BOOTSTRAP 只留一个 harvester**。「每 source 一个」会让殖民地在造出 upgrader 前先造第二个 harvester；而 RCL 1→2 只要 200 能量却解锁 +250 容量，是前期回报最高的单步。
+1. **装满再移动。** 角色原本「一有能量就出发」，harvester 采 4 能量走 5 格 —— 控制器进度长期为 0。修复后吞吐提升约 10 倍。
+2. **唯一的恢复手段必须有主动保留。** 只有 harvester 会向 spawn 存能量；spawn 能量是殖民地唯一能重建收入的手段，见底即不可自愈。
+3. **用不变量检查取代几何规则。** 「保留 spawn 的 N 邻格」不足（8 方向移动，半径 2 处封格同样堵死走廊）；放置前对房间做一次 BFS 才是直接回答。
+4. **占满配额的东西必须能被回收**，否则修复会静默自锁（工地计入结构上限时的经典陷阱）。
+5. **角色/结构的行为必须在真实引擎里验证。** 逐 tick 断言「结果而非意图」：意图层一直是对的，物理层才是 bug 来源。
 
 ### `npm run smoke` 能证明什么、不能证明什么
 
 跑的是**真实上传产物** `dist/main.js`（不是 TS 源码），对着按文档契约建模的引擎全局跑 N tick。因此：
 
-- **能证明**：产物可加载、导出 `loop`、重复调用不崩溃、Memory 迁移只发生一次、stats 段写入且有界、CPU 降级按优先级生效且**关键阶段（spawn/assign/cleanup）从不被跳过**。
-- **不能证明移动/伤害/资源消耗/结构耐久** —— 这些只在真实引擎里存在。因此 M1–M3 的策略必须保守。
+- **能证明**：产物可加载、导出可调用的 `loop`、在常规与高压两种 CPU 预算下重复调用都不抛异常。
+- **不能证明**游戏行为 —— 这里没有物理。判断「脚本做得对不对」需要另外的验证层，由新设计定义。
 
-> 注意 harness 的一个刻意设计：CPU 在 `loop()` **之前**计入。若在之后计入，内核看到的 `getUsed()` 恒为 0，降级路径永远不会被跑到。
+> 注意 harness 的一个刻意设计：CPU 在 `loop()` **之前**计入。若在之后计入，`getUsed()` 恒为 0，任何预算逻辑都跑不到。

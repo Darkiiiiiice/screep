@@ -1,4 +1,12 @@
-# Screeps: World AI —— 实施计划
+# Screeps: World AI —— 实施计划（v1，已归档）
+
+> **状态（2026-09-11）：本文档描述的 v1 实现已从仓库删除，等待重新设计。**
+>
+> 删除范围：`src/{kernel,domain,game,colony}`、`test/`、本地引擎 sim 夹具（`scripts/local-sim.mjs`、`sim.sh`、`engine-setup.sh`）。
+> 保留：工程脚手架（build/typecheck/lint/test/smoke/deploy/watch/stats/whoami/snapshot）与 §1 的事实基线、§5 的实测记录。
+> §2–§4 的架构分层、状态机、角色配额是对 **v1 设计**的描述，重写时只作参考，不是约束。
+
+## v1 计划正文
 
 > 目标：从零构建一套可持续演进、可回归验证的 Screeps MMO（screeps.com）AI 脚本。
 > 决策基线（已确认）：**只在官方线上玩，不做私服**；TypeScript + esbuild 精简流水线；纯逻辑单测为核心验证手段；首个里程碑是内核框架（调度/任务/状态机）；已有账号与 token。

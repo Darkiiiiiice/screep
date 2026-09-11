@@ -12,7 +12,6 @@
  *   --dry-run  build + validate + report quota, upload nothing
  */
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { connect } from './lib/client.mjs';
 import { checkQuota, record, deployBudget } from './lib/quota-ledger.mjs';
@@ -47,20 +46,11 @@ const newestSource = (dir) =>
 const bundleTime = statSync(BUNDLE).mtimeMs;
 const sourceTime = Math.max(newestSource('src'), newestSource('scripts'));
 
-if (process.env.SKIP_SIM !== '1' && existsSync(resolve(process.cwd(), '.engine/node_modules'))) {
-  // Gate: the local engine has to accept the bundle first.
-  //
-  // This exists because the alternative was measured: a stretch of deploys that
-  // each cost one of 240 daily uploads and then needed minutes of observation at
-  // ~4 seconds per tick to reveal a movement bug that the local engine reproduces
-  // in milliseconds. `SKIP_SIM=1` overrides it for work the engine cannot model.
-  console.log('[deploy] running local engine gate (npm run sim)');
-  const sim = spawnSync('bash', ['scripts/sim.sh'], { stdio: 'inherit' });
-  if (sim.status !== 0) {
-    console.error('[deploy] local sim FAILED — not uploading. Set SKIP_SIM=1 to override.');
-    process.exit(1);
-  }
-}
+// NOTE: the local-engine gate (a 600-tick `npm run sim` before every upload)
+// lived here. It was removed with the sim harness on 2026-09-11, when the
+// implementation was wiped for a redesign. Whatever verification layer the new
+// design defines belongs back at this point — a deploy costs 1 of 240 daily
+// uploads, and the live tick rate (~4 s) makes mistakes expensive to observe.
 
 if (sourceTime > bundleTime) {
   console.error('[deploy] dist/main.js is older than the sources — run `npm run build` first.');
