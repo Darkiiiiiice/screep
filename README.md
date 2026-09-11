@@ -28,6 +28,7 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 | `npm run watch [-- --seconds N]` | WebSocket 流式订阅 console | **否**（不占 HTTP 配额） |
 | `npm run stats` | 拉取 memory segment 统计，追加 `docs/live-metrics.md` | `GET /api/user/memory-segment` |
 | `npm run snapshot` | 录制线上房间快照为测试夹具（轨道 B 的输入） | 2 次请求 |
+| `npm run engine` | 首次安装本地真实引擎（Node 24 + GCC 15，数分钟）——**工具，无夹具消费者** | 否 |
 
 ## 配额是硬约束
 
@@ -49,6 +50,7 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 | `npm test`（vitest） | 纯决策逻辑 | 物理；无引擎 |
 | `npm run smoke` | 产物可加载、导出 `loop`、两种 CPU 预算下 200 tick 不抛异常 | 游戏行为、寻路、能量流 |
 | `npm run snapshot` | 录制线上房间快照为夹具 | 不验证任何东西，只取数据 |
+| 本地引擎（`npm run engine`） | **能力保留**：真实物理逐 tick 可测（238 ms/tick vs 线上 4000 ms/tick） | v1 的夹具已删，新夹具待重设计 |
 
 ## 架构不变式
 
@@ -82,7 +84,8 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 
 > **2026-09-11：实现层已清空，等待重新设计。**
 >
-> `src/domain`、`src/game`、`src/kernel`、`src/colony`、`test/` 与本地引擎 sim 夹具（`scripts/local-sim.mjs`、`sim.sh`、`engine-setup.sh`）已删除；
+> `src/domain`、`src/game`、`src/kernel`、`src/colony`、`test/` 与 v1 的本地引擎测试夹具（`scripts/local-sim.mjs`、`sim.sh`、`lib/fake-room.mjs`）已删除；
+> **引擎本身的能力保留**：`scripts/engine-setup.sh`（`npm run engine`）仍可装出本地真实引擎——Node 24 + GCC 15，约 238 ms/tick，对比线上约 4000 ms/tick。
 > `src/main.ts` 是空的 `loop()` 占位，保证 build/typecheck/lint/smoke 仍可运行。
 > 下面保留的是**实测事实**（对重新设计仍然有效），不是对现有代码的描述。
 
