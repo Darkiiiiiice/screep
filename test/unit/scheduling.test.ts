@@ -17,6 +17,10 @@ it('rotates room priority under pressure and retains unseen room capability as u
   vi.stubGlobal('FIND_MY_SPAWNS', 112);
   vi.stubGlobal('FIND_SOURCES', 105);
   vi.stubGlobal('FIND_MY_CREEPS', 102);
+  vi.stubGlobal('FIND_MY_STRUCTURES', 101);
+  vi.stubGlobal('FIND_HOSTILE_CREEPS', 103);
+  vi.stubGlobal('FIND_STRUCTURES', 104);
+  vi.stubGlobal('STRUCTURE_TOWER', 'tower');
   const visited: string[] = [];
   let used = 0;
   const room = (name: string) => ({ name, controller: { my: true, level: 1 }, energyCapacityAvailable: 300, energyAvailable: 0,

@@ -24,12 +24,14 @@ const populationPressure = args.includes('--population-pressure');
 const cpuStress = args.includes('--cpu-stress');
 const multiRoom = args.includes('--multi-room');
 const maintenanceProbe = args.includes('--maintenance-probe');
+const defenseProbe = args.includes('--defense-probe');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
 assert(!trafficRecovery || !lifecycle && !fairnessProbe && !logistics, '--traffic-recovery runs standalone');
 assert(!multiRoom || lifecycle && logistics && fairnessProbe, '--multi-room requires --lifecycle --logistics --fairness-probe');
 assert(!maintenanceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--maintenance-probe requires --lifecycle --logistics');
+assert(!defenseProbe || lifecycle && logistics && !construction && !fairnessProbe, '--defense-probe requires --lifecycle --logistics');
 const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
@@ -39,7 +41,7 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, tickCount,
   node: process.version,
   versions: Object.fromEntries(['screeps-server-mockup', '@screeps/engine', '@screeps/driver', '@screeps/common'].map((name) => [name, requireEngine(`${name}/package.json`).version])),
   checks: [], ticks: [], logs: [], status: 'running',
@@ -179,6 +181,27 @@ try {
       store: { energy: 300 }, storeCapacity: 2000, hits: 150000, hitsMax: 250000, nextDecayTime: 500,
     });
     report.maintenance = { damagedContainer: [17, 15], seededHits: 150000 };
+  }
+  if (defenseProbe) {
+    // RCL3 (tower cap 1) + a stocked tower + an armed Invader raider: the tower
+    // must focus-fire it down, then heal the seeded wounded worker. Tower user =
+    // bot so FIND_MY_* works; the raider belongs to Invader (user 2) → hostile.
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 3, progress: 0 } });
+    await server.world.addRoomObject(fixture.room, 'tower', 24, 24, {
+      user: bot.id, store: { energy: 1000 }, energy: 1000, energyCapacity: 1000, hits: 3000, hitsMax: 3000,
+    });
+    await server.world.addRoomObject(fixture.room, 'creep', 34, 34, {
+      user: '2', name: 'Raider', body: [
+        ...Array.from({ length: 10 }, () => ({ type: 'attack', hits: 100 })),
+        ...Array.from({ length: 10 }, () => ({ type: 'move', hits: 100 })),
+      ],
+      hits: 1000, hitsMax: 1000, store: {}, storeCapacity: 0, fatigue: 0, spawning: false, ageTime: 1501, actionLog: {},
+    });
+    await server.world.addRoomObject(fixture.room, 'creep', 25, 24, {
+      user: bot.id, name: 'Wounded', body: [{ type: 'work', hits: 100 }, { type: 'carry', hits: 100 }, { type: 'move', hits: 100 }],
+      hits: 150, hitsMax: 300, store: { energy: 20 }, storeCapacity: 50, fatigue: 0, spawning: false, ageTime: 1501, actionLog: {},
+    });
+    report.defense = { tower: [24, 24], raiderHits: 1000, woundedHits: 150 };
   }
   if (fairnessProbe) {
     await server.world.addRoomObject(fixture.room, 'extension', 26, 25, { user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
@@ -387,6 +410,21 @@ try {
       check('generalized builders make progress on the legacy extension site', (fixtureSite?.progress ?? 0) > 0 || builtExtension);
       const ringPlacements = lastObjects.filter(o => o.structureType === 'extension' && (o.type === 'constructionSite' || o.type === 'extension') && !(o.x === 15 && o.y === 16));
       check('planner places extension sites around the spawn at RCL2', ringPlacements.length >= 1);
+    }
+    if (defenseProbe) {
+      const series = (type, name) => report.ticks
+        .map(t => t.objects.find(o => o.type === type && o.name === name))
+        .filter(o => o !== undefined)
+        .map(o => o.hits);
+      // Tower volleys subtract hits; decay never adds. Rising above the seed is
+      // impossible for the raider, so any drop below it proves the tower fired.
+      check('tower attacks the armed raider', series('creep', 'Raider').some(h => h < report.defense.raiderHits));
+      const towerSeries = report.ticks
+        .map(t => t.objects.find(o => o.type === 'tower')?.store?.energy)
+        .filter(h => h !== undefined);
+      check('tower spends energy on defense', towerSeries.some(h => h < 1000));
+      check('tower heal lifts the wounded worker', series('creep', 'Wounded').some(h => h > report.defense.woundedHits));
+      check('no friendly fire from the tower', Math.min(...series('creep', 'Wounded')) >= report.defense.woundedHits);
     }
     report.lifecycle = { births, delivered, maxEmptyRun, maxControllerIdle };
     if (logistics) check('controller service resumes within 400 ticks with three workers', maxControllerIdle <= 400);
