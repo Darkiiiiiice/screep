@@ -2,7 +2,7 @@
 
 Screeps: World MMO AI — 纯官方线上（screeps.com）方案。
 
-实施计划见 [`PLAN.md`](./PLAN.md)。
+实施计划见 [`PLAN.md`](./PLAN.md)。M0 已完成，M1 核心自养闭环通过生命周期验收，补充能力仍在实施。`npm run verify` 执行快速门禁；`npm run test:lifecycle` 执行 3100 tick 自养与接替验证；`npm run test:recovery` 执行清空人口/能量/Memory 后的恢复验证。
 
 ## 快速开始
 
@@ -29,6 +29,44 @@ npm run whoami                        # 验证 token；自动识别所在 shard
 | `npm run stats` | 拉取 memory segment 统计，追加 `docs/live-metrics.md` | `GET /api/user/memory-segment` |
 | `npm run snapshot` | 录制线上房间快照为测试夹具（轨道 B 的输入） | 2 次请求 |
 | `npm run engine` | 首次安装本地真实引擎（Node 24 + GCC 15，数分钟）——**工具，无夹具消费者** | 否 |
+| `npm run scenario -- <fresh\|legacy\|no-memory>` | 使用本地真实引擎跑 M0 场景并保存 `artifacts/scenarios/*/report.json` | 否 |
+| `npm run verify` | 执行 M0 全部门禁和三个场景 | 否 |
+| `npm run select-room` | 自动识别 shard、评分候选出生房并生成报告（dry-run） | 读取请求 |
+| `npm run select-room -- --room W35S2 --execute` | 重新检查选址并通过 `gamePlaceSpawn` 放置 Spawn1 | 改变世界 |
+
+### 首次自动选房
+
+运行 `npm run select-room` 进行只读扫描。`world-start-room` 返回推荐区域中心，不保证中心有 controller；选择器扫描每个中心四个方向距离 3 的普通房间，排除已占领、预留、敌军、无 controller 和情报不完整的房间。不是对整个 shard 的穷举。
+
+评分考虑 source 数量、到资源/控制器的八方向地形距离、核心附近可用空间与沼泽。选择平原 spawn 位置，要求足够邻接空间和到所有工作目标的连通性。当前尚未扫描邻居威胁或远期扩张潜力，地形距离未计入身体疲劳；报告明确保留这些限制。
+
+```bash
+npm run select-room                         # 只读扫描并输出推荐
+npm run select-room -- --room W35S2          # 单房重新评估
+npm run select-room -- --room W35S2 --execute # 重新评估后实际出生
+```
+
+执行需要 token 对 `game/place-spawn` 的权限。出生前再次检查世界为空和位置未变化；成功后读取房间对象验证 Spawn1。网络失败时先检查世界，避免盲目重试。该工具不会上传代码，也不会删除房间或执行 respawn。
+
+M1 本地代码已具备采集、供能、孵化和升级能力，但本地改动不会自动替换线上代码。推荐结果记录于 `artifacts/bootstrap/selection-*.json`，执行时以重新扫描结果为准。
+
+### M1 状态与验证
+
+M2 开发中：`Memory.logisticsEnabled = true` 可启用容器自动施工、定点采矿、孵化补能预约、统一移动仲裁和控制器升级服务窗口，默认关闭。600 tick 恢复与对向互换引擎探针已通过；完整任务依赖环、封闭窄路恢复及长期验收仍待完成。测试命令：`npm run test:logistics`、`npm run test:logistics-construction`、`npm run test:traffic`。详细证据见 [M2 本地验证](docs/M2-local-validation.md)。
+
+`Memory.bootstrap` 保存按能力接管的工作单位状态、房间人口需求、孵化储备、阻塞原因、有限错误记录和 `heartbeat`。全局缓存清空不影响恢复；旧的 `Memory.creeps` 角色不会阻止接管。每 20 tick 输出 segment 0 统计。
+
+`Memory.policy.reserveEnergy` 和 `targetEnergy` 控制有效储备与补能目标，按实际孵化容量限制，接替预算优先。`Memory.bootstrap.capabilities` 记录当前 CPU/GCL 与房间能力，失去视野保留未知状态；`policyIssues` 记录无效配置。扩张和攻击相关配置仍由后续里程碑消费。
+
+调度以常态 CPU 上限预留 2 CPU 收尾，房间和 creep 分别轮转，避免固定排序造成饥饿。连续无进展三次后，任务暂停 25–200 tick 再探测，重试计数上限六次；库存发生实际变化时解除阻塞。`blocked`/`retryAt` 提供排障依据。
+
+M1 使用通用工作单位建立自养闭环，当前目标为每 source 两个工作单位（最多六个），后续 M2 根据实际吞吐替换为矿工/运输岗位需求。M1 不创建建筑或远征。
+
+2026-09-11 本地验收：3100 tick 中共 12 次工作单位出生，控制器累计投入 4857 能量，初始化后无人窗口为 0；600 tick 故障场景恢复到四名工作单位并继续升级。此结果不代表线上 CPU 或完整 M1 附加能力验收通过。
+
+配置、能力快照与轮转/退避补充版亦重新通过 3100 tick 和 600 tick 恢复验证，单测增至 14 项。报告分别位于 `artifacts/scenarios/fresh-1789127729154-1048057/report.json` 和 `artifacts/scenarios/no-memory-1789127530859-1046296/report.json`。
+
+生命周期测试约需十余分钟，显示每 100 tick 的人口与控制器进度；各运行使用独立端口和目录。`--recovery` 场景在 tick 200 删除人口、清空 spawn 能量和 Memory，仅留下一个可工作单位，用于验证自救条件。报告位于 `artifacts/scenarios/`。
 
 ## 配额是硬约束
 

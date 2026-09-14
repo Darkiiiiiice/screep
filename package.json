@@ -19,7 +19,22 @@
     "whoami": "node scripts/whoami.mjs",
     "smoke": "node scripts/smoke.mjs",
     "snapshot": "node scripts/snapshot.mjs",
-    "engine": "bash scripts/engine-setup.sh"
+    "engine": "bash scripts/engine-setup.sh",
+    "scenario": "node scripts/scenario.mjs",
+    "test:lifecycle": "node scripts/scenario.mjs fresh --lifecycle",
+    "test:recovery": "node scripts/scenario.mjs no-memory --lifecycle --recovery",
+    "test:logistics": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --logistics-recovery",
+    "test:logistics-construction": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --construction",
+    "test:traffic": "node scripts/scenario.mjs fresh --traffic-probe",
+    "test:traffic-recovery": "node scripts/scenario.mjs fresh --traffic-recovery",
+    "test:fairness": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --fairness-probe",
+    "test:multi-room": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --fairness-probe --multi-room",
+    "test:economy": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --economy-probe",
+    "test:fairness-pressure": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --fairness-probe --population-pressure",
+    "test:cpu-stress": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --fairness-probe --cpu-stress",
+    "test:logistics-failure": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --logistics-recovery --persistent-failure",
+    "select-room": "node scripts/select-room.mjs",
+    "verify": "npm run typecheck && npm run lint && npm test && npm run build && npm run smoke && npm run scenario -- fresh && npm run scenario -- legacy && npm run scenario -- no-memory"
   },
   "dependencies": {
     "screeps-api": "^2.1.0"

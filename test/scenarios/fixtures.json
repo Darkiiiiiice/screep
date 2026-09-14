@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "room": "W0N1",
+  "seed": 0,
+  "terrain": { "walls": [[10, 10], [10, 40], [40, 10], [40, 40]], "swamps": [[21, 20]] },
+  "controller": [10, 12],
+  "sources": [[15, 15], [35, 35]],
+  "spawn": [25, 25],
+  "variants": {
+    "fresh": { "memory": {}, "legacyAssets": false },
+    "legacy": { "memory": { "schemaVersion": 0, "creeps": { "LegacyWorker": { "role": "old-builder" } } }, "legacyAssets": true },
+    "no-memory": { "memory": {}, "legacyAssets": true }
+  }
+}

@@ -5,3 +5,4 @@ dist/
 .screeps-quota.jsonl
 .engine/
 server/
+artifacts/

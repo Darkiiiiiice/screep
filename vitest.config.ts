@@ -10,8 +10,6 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     environment: 'node',
-    // The implementation was wiped pending a redesign, so an empty test tree is
-    // the expected state and must not fail the suite.
-    passWithNoTests: true,
+    passWithNoTests: false,
   },
 });

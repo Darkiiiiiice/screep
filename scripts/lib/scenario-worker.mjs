@@ -1,0 +1,407 @@
+import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:net';
+import { build } from 'esbuild';
+
+const requireEngine = createRequire(resolve('.engine/package.json'));
+const { ScreepsServer, TerrainMatrix } = requireEngine('screeps-server-mockup');
+const fixture = JSON.parse(readFileSync('test/scenarios/fixtures.json', 'utf8'));
+const args = process.argv.slice(2);
+const lifecycle = args.includes('--lifecycle');
+const recovery = args.includes('--recovery');
+const logistics = args.includes('--logistics');
+const construction = args.includes('--construction');
+const logisticsRecovery = args.includes('--logistics-recovery');
+const persistentFailure = args.includes('--persistent-failure');
+const trafficProbe = args.includes('--traffic-probe');
+const trafficRecovery = args.includes('--traffic-recovery');
+const fairnessProbe = args.includes('--fairness-probe');
+const economyProbe = args.includes('--economy-probe');
+const populationPressure = args.includes('--population-pressure');
+const cpuStress = args.includes('--cpu-stress');
+const multiRoom = args.includes('--multi-room');
+assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
+assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
+assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
+assert(!trafficRecovery || !lifecycle && !fairnessProbe && !logistics, '--traffic-recovery runs standalone');
+assert(!multiRoom || lifecycle && logistics && fairnessProbe, '--multi-room requires --lifecycle --logistics --fairness-probe');
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : recovery || logistics ? 600 : 3100) : 6;
+const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
+assert(fixture.variants[variant], `unknown variant: ${variant}`);
+const injectFailure = args.includes('--inject-failure');
+const output = resolve('artifacts/scenarios', `${variant}-${Date.now()}-${process.pid}`);
+mkdirSync(output, { recursive: true });
+const bundle = readFileSync('dist/main.js', 'utf8');
+const report = {
+  variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, tickCount,
+  node: process.version,
+  versions: Object.fromEntries(['screeps-server-mockup', '@screeps/engine', '@screeps/driver', '@screeps/common'].map((name) => [name, requireEngine(`${name}/package.json`).version])),
+  checks: [], ticks: [], logs: [], status: 'running',
+};
+const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
+save();
+const freePort = await new Promise((resolvePort, reject) => {
+  const socket = createServer();
+  socket.on('error', reject);
+  socket.listen(0, '127.0.0.1', () => { const port = socket.address().port; socket.close(() => resolvePort(port)); });
+});
+const server = new ScreepsServer({ path: resolve(output, 'server'), logdir: resolve(output, 'logs'), port: Number(process.env.SCREEPS_TEST_PORT ?? freePort) });
+server.on('error', (error) => { report.logs.push(String(error)); save(); });
+let bot;
+const check = (name, condition) => {
+  report.checks.push({ name, passed: Boolean(condition) });
+  assert(condition, name);
+};
+try {
+  await server.world.reset();
+  const terrain = new TerrainMatrix();
+  for (const [x, y] of fixture.terrain.walls) terrain.set(x, y, 'wall');
+  for (const [x, y] of fixture.terrain.swamps) terrain.set(x, y, 'swamp');
+  if (trafficRecovery) for (const [x, y] of [[30, 18], [32, 18], [30, 19], [32, 19], [30, 20], [32, 20], [30, 21], [31, 21], [32, 21], [39, 24], [40, 24], [41, 24], [39, 25], [41, 25], [39, 26], [40, 26], [41, 26]]) terrain.set(x, y, 'wall');
+  await server.world.addRoom(fixture.room);
+  await server.world.setTerrain(fixture.room, terrain);
+  await server.world.addRoomObject(fixture.room, 'controller', ...fixture.controller, { level: 0 });
+  for (const [x, y] of fixture.sources) {
+    await server.world.addRoomObject(fixture.room, 'source', x, y, { energy: 3000, energyCapacity: 3000, nextRegenerationTime: 301 });
+  }
+  // Rule probes are independent of AI strategy; lifecycle mode runs the bundle.
+  const probe = `
+    module.exports.loop = function () {
+      require('app').loop();
+      const c = Game.creeps.Probe;
+      Memory.probe = Memory.probe || [];
+      const row = {tick: Game.time, x: c.pos.x, energy: c.store.energy, fatigue: c.fatigue};
+      if (Game.time === 1) {
+        row.harvest = c.harvest(c.pos.findClosestByRange(FIND_SOURCES));
+        row.immediateEnergy = c.store.energy;
+        row.limit = Game.rooms.W0N1.createConstructionSite(30, 30, STRUCTURE_EXTENSION);
+        row.containers = CONTROLLER_STRUCTURES.container;
+      }
+      if (Game.time === 2) row.move = c.move(RIGHT);
+      if (Game.time === 3) row.move = c.move(RIGHT);
+      if (Game.time === 4) row.siteMove = c.move(RIGHT);
+      if (Game.time === 5) row.roadMove = c.move(RIGHT);
+      Memory.probe.push(row);
+    };`;
+  const trafficBundle = trafficProbe || trafficRecovery ? (await build({ entryPoints: ['src/game/traffic.ts'], bundle: true, write: false, format: 'cjs', platform: 'neutral', target: 'node24' })).outputFiles[0].text : '';
+  const trafficRecoveryMain = `module.exports.loop = function () {
+    const traffic = require('traffic');
+    const mem = Memory.trafficRecovery ??= { positions: [], states: [] };
+    const worker = Game.creeps.CorridorWorker, blocker = Game.creeps.Blocker, sealed = Game.creeps.Sealed;
+    const row = { t: Game.time,
+      w: worker ? [worker.pos.x, worker.pos.y] : null,
+      b: blocker ? [blocker.pos.x, blocker.pos.y] : null,
+      s: sealed ? [sealed.pos.x, sealed.pos.y] : null };
+    const trafficState = (creep) => creep?.memory.traffic ? { stuck: creep.memory.traffic.stuck, failures: creep.memory.traffic.failures, wait: (creep.memory.traffic.retryAt ?? Game.time) - Game.time } : null;
+    const state = { t: Game.time, w: trafficState(worker), b: trafficState(blocker), s: trafficState(sealed) };
+    if (worker) traffic.requestMove(worker, new RoomPosition(31, 20, worker.room.name), 0);
+    if (blocker && Game.time >= 40 && (blocker.pos.x !== 31 || blocker.pos.y !== 16)) traffic.requestMove(blocker, new RoomPosition(31, 16, blocker.room.name), 0);
+    if (sealed) traffic.requestMove(sealed, new RoomPosition(40, 25, sealed.room.name), 0);
+    traffic.flushTraffic(worker.room);
+    mem.positions.push(row);
+    mem.states.push(state);
+  };`;
+  const trafficMain = `module.exports.loop = function () {
+    const traffic = require('traffic');
+    const a = Game.creeps.SwapA, b = Game.creeps.SwapB;
+    if (Game.time === 1) {
+      traffic.requestMove(a, b.pos, 0);
+      traffic.requestMove(b, a.pos, 0);
+    }
+    const c = Game.creeps.ChainA, d = Game.creeps.ChainB, e = Game.creeps.Blocker;
+    if (Game.time === 1 || Game.time === 4) {
+      traffic.requestMove(c, d.pos, 0);
+      traffic.requestMove(d, e.pos, 0);
+      if (Game.time === 4) traffic.requestMove(e, new RoomPosition(23, 30, e.room.name), 0);
+    }
+    traffic.flushTraffic(a.room);
+  };`;
+  bot = await server.world.addBot({ username: 'M0', room: fixture.room, x: fixture.spawn[0], y: fixture.spawn[1], modules: trafficRecovery ? { main: trafficRecoveryMain, traffic: trafficBundle } : trafficProbe ? { main: trafficMain, traffic: trafficBundle } : fairnessProbe ? { main: bundle } : lifecycle ? { main: bundle } : { main: probe, app: 'module.exports.loop = function() {}' } });
+  if (trafficProbe || trafficRecovery) report.trafficBundleHash = createHash('sha256').update(trafficBundle).digest('hex');
+  bot.on('console', (logs) => report.logs.push(...logs));
+  const { db, env } = server.common.storage;
+  await env.set(env.keys.MEMORY + bot.id, JSON.stringify(fixture.variants[variant].memory));
+  const addCreep = (name, x, y) => server.world.addRoomObject(fixture.room, 'creep', x, y, {
+    user: bot.id, name, body: ['work', 'carry', 'move'].map((type) => ({ type, hits: 100 })),
+    hits: 300, hitsMax: 300, store: { energy: 0 }, storeCapacity: 50,
+    fatigue: 0, spawning: false, ageTime: 1501, actionLog: {},
+  });
+  if (!lifecycle) await addCreep('Probe', 14, 15);
+  if (cpuStress) await db.users.update({ _id: bot.id }, { $set: { cpu: 10 } });
+  if (trafficProbe) {
+    await addCreep('SwapA', 20, 25);
+    await addCreep('SwapB', 21, 25);
+    await addCreep('ChainA', 20, 30);
+    await addCreep('ChainB', 21, 30);
+    await addCreep('Blocker', 22, 30);
+  }
+  if (trafficRecovery) {
+    await addCreep('CorridorWorker', 31, 16);
+    await addCreep('Blocker', 31, 19);
+    await addCreep('Sealed', 37, 25);
+  }
+  if (fairnessProbe) {
+    for (const [x, y] of fixture.sources) await server.world.addRoomObject(fixture.room, 'container', x + 1, y, {
+      store: { energy: 500 }, storeCapacity: 2000, hits: 250000, hitsMax: 250000, nextDecayTime: 500,
+    });
+    for (const [index, [x, y]] of [[23, 24], [27, 24], [23, 26], [27, 26]].entries()) await addCreep(`FairWorker${index}`, x, y);
+    if (populationPressure) for (let index = 0; index < 20; index++) await addCreep(`PressureWorker${index}`, 20 + index % 8, 20 + Math.floor(index / 8));
+    if (cpuStress) for (let index = 0; index < 60; index++) await addCreep(`StressWorker${index}`, 18 + index % 14, 30 + Math.floor(index / 14));
+  }
+  // Compare a blocking construction site with a traversable road site.
+  await server.world.addRoomObject(fixture.room, 'constructionSite', 15, 16, {
+    user: bot.id, structureType: 'extension', progress: 0, progressTotal: 3000,
+  });
+  if (fixture.variants[variant].legacyAssets) {
+    await addCreep('LegacyWorker', 24, 24);
+    await server.world.addRoomObject(fixture.room, 'container', 16, 15, {
+      store: { energy: 500 }, storeCapacity: 2000, hits: 100000, hitsMax: 250000, nextDecayTime: 100,
+    });
+  }
+  if (logistics) {
+    await env.set(env.keys.MEMORY + bot.id, JSON.stringify({ logisticsEnabled: true }));
+    if (!construction) for (const [x, y] of fixture.sources) await server.world.addRoomObject(fixture.room, 'container', x + 1, y, {
+      store: { energy: 0 }, storeCapacity: 2000, hits: 250000, hitsMax: 250000, nextDecayTime: 500,
+    });
+  }
+  if (fairnessProbe) {
+    await server.world.addRoomObject(fixture.room, 'extension', 26, 25, { user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
+    await server.world.addRoomObject(fixture.room, 'extension', 24, 25, { user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
+    await env.set(env.keys.MEMORY + bot.id, JSON.stringify({ logisticsEnabled: true, fairnessProbe: { last: {}, maxWait: {}, delivered: {} } }));
+  }
+  report.initialObjects = await server.world.roomObjects(fixture.room);
+  report.constants = { containers: server.constants.CONTROLLER_STRUCTURES.container, creepSpawnTime: server.constants.CREEP_SPAWN_TIME };
+  if (multiRoom) {
+    const roomB = 'W0N2';
+    await server.world.addRoom(roomB);
+    await server.world.setTerrain(roomB, new TerrainMatrix());
+    await server.world.addRoomObject(roomB, 'controller', 10, 12, { level: 1, user: bot.id, progress: 0 });
+    for (const [x, y] of fixture.sources) {
+      await server.world.addRoomObject(roomB, 'source', x, y, { energy: 3000, energyCapacity: 3000, nextRegenerationTime: 301 });
+    }
+    await server.world.addRoomObject(roomB, 'spawn', 25, 25, { user: bot.id, name: 'Spawn2', store: { energy: 300 }, storeCapacityResource: { energy: 300 }, hits: 5000, hitsMax: 5000, spawning: null, notifyWhenAttacked: true });
+    report.multiRoom = { room: roomB, controller: [10, 12], sources: fixture.sources, spawn: [25, 25] };
+  }
+  await server.start();
+  let births = 0, delivered = 0, emptyRun = 0, maxEmptyRun = 0;
+  let lastControllerProgress = 0, controllerIdle = 0, maxControllerIdle = 0;
+  if (fairnessProbe) report.fairness = { delivered: {}, last: {}, maxWait: {} };
+  const names = new Set();
+  for (let i = 0; i < tickCount; i++) {
+    if (persistentFailure && [450, 451, 452].includes(i)) {
+      const current = JSON.parse(await bot.memory || '{}');
+      if (i === 450) {
+        const live = (await server.world.roomObjects(fixture.room)).filter(o => o.type === 'creep' && o.user === bot.id && !o.spawning).sort((a, b) => a.name.localeCompare(b.name));
+        const selected = live.find(o => !current.creeps[o.name]?.delivery && !current.creeps[o.name]?.logisticsRecovery);
+        assert(selected, 'persistent fault requires a worker without an unsettled delivery or recovery');
+        report.persistentFault = { name: selected.name, actions: 0 };
+      }
+      const name = report.persistentFault.name;
+      current.creeps[name].shipment = { from: 'fault-source', to: 'fault-target', expires: 900, dependsOn: [name], waitingSince: i };
+      await env.set(env.keys.MEMORY + bot.id, JSON.stringify(current));
+    }
+    if (logisticsRecovery && i === 400) {
+      const current = JSON.parse(await bot.memory || '{}');
+      const live = (await server.world.roomObjects(fixture.room)).filter(o => o.type === 'creep' && o.user === bot.id && !o.spawning).map(o => o.name).sort();
+      assert(live.length >= 3, 'cycle injection requires three active workers');
+      const members = live.slice(0, 3);
+      for (const [index, name] of members.entries()) {
+        const creep = current.creeps[name] ??= {};
+        creep.shipment = { from: 'cycle-source', to: 'cycle-target', expires: 900, dependsOn: [members[(index + 1) % members.length]], waitingSince: 400 };
+      }
+      report.cycleInjection = { members, deliveredBefore: current.logisticsDelivered ?? 0 };
+      await env.set(env.keys.MEMORY + bot.id, JSON.stringify(current));
+    }
+    if (economyProbe && i === 300) {
+      const site = report.initialObjects.find(o => o.type === 'constructionSite' && o.x === 15 && o.y === 16);
+      const spawnObject = report.initialObjects.find(o => o.type === 'spawn' && o.user === bot.id);
+      assert(site && spawnObject, 'economy probe requires the fixture site and spawn');
+      const current = JSON.parse(await bot.memory || '{}');
+      const previous = report.ticks.at(-1);
+      const serviceWorker = previous.memory.controllerService?.W0N1?.worker;
+      const live = previous.objects.filter(o => o.type === 'creep' && o.user === bot.id && !o.spawning).map(o => o.name).sort();
+      const selected = live.find(name => name !== serviceWorker && !current.creeps[name]?.shipment && !current.creeps[name]?.containerBuilder);
+      assert(selected, 'economy probe requires an idle worker');
+      current.creeps[selected].shipment = { from: spawnObject._id, to: spawnObject._id, expires: 900, dependsOn: [`build:${site._id}`], waitingSince: 300 };
+      delete current.creeps[selected].minerSource;
+      await env.set(env.keys.MEMORY + bot.id, JSON.stringify(current));
+      report.economyProbe = { worker: selected, site: site._id };
+    }
+    if (logisticsRecovery && i === 350) {
+      const current = JSON.parse(await bot.memory || '{}');
+      for (const creep of Object.values(current.creeps ?? {})) {
+        creep.shipment = { from: 'destroyed-source', to: 'destroyed-target', expires: 500 };
+      }
+      await env.set(env.keys.MEMORY + bot.id, JSON.stringify(current));
+      report.logisticsRecoveryInjectedAt = i;
+    }
+    if (lifecycle && recovery && i === 200) {
+      await db['rooms.objects'].removeWhere({ type: 'creep', user: bot.id });
+      await db['rooms.objects'].update({ type: 'spawn', user: bot.id }, { $set: { store: { energy: 0 }, spawning: null } });
+      await addCreep('RescueWorker', 14, 15);
+      await env.set(env.keys.MEMORY + bot.id, '{}');
+      report.recoveryInjectedAt = i;
+    }
+    if (!lifecycle && i === 1) {
+      // Reposition between independent probes, retaining the harvested load.
+      await db['rooms.objects'].update({ name: 'Probe', user: bot.id }, { $set: { x: 20, y: 20, fatigue: 0 } });
+    }
+    if (!lifecycle && i === 3) {
+      await db['rooms.objects'].update({ name: 'Probe', user: bot.id }, { $set: { x: 14, y: 16, fatigue: 0 } });
+    }
+    if (!lifecycle && i === 4) {
+      await db['rooms.objects'].update({ type: 'constructionSite', x: 15, y: 16 }, { $set: { structureType: 'road' } });
+    }
+    await server.tick();
+    const snapshot = { time: await server.world.gameTime, objects: await server.world.roomObjects(fixture.room), memory: JSON.parse(await bot.memory || '{}'), ...(multiRoom ? { roomB: await server.world.roomObjects('W0N2') } : {}) };
+    if (fairnessProbe) {
+      const fairness = report.fairness;
+      for (const object of snapshot.objects.filter(o => o.type === 'extension' && o.user === bot.id)) {
+        fairness.last[object._id ?? object.id] ??= i;
+        fairness.maxWait[object._id ?? object.id] = Math.max(fairness.maxWait[object._id ?? object.id] ?? 0, i - fairness.last[object._id ?? object.id]);
+        if ((object.store?.energy ?? 0) > 0) {
+          fairness.delivered[object._id ?? object.id] = (fairness.delivered[object._id ?? object.id] ?? 0) + object.store.energy;
+          fairness.last[object._id ?? object.id] = i;
+          await db['rooms.objects'].update({ _id: object._id }, { $set: { store: { energy: 0 } } });
+        }
+      }
+    }
+    if (economyProbe) {
+      const namespaces = Object.values(snapshot.memory.logisticsTasks ?? {});
+      const tasks = Object.assign({}, ...namespaces);
+      report.economy ??= { spawnSeen: false, buildSeen: false, crossKind: false, released: false };
+      if (Object.keys(tasks).some(id => id.startsWith('spawn:'))) report.economy.spawnSeen = true;
+      if (Object.keys(tasks).some(id => id.startsWith('build:'))) report.economy.buildSeen = true;
+      const worker = snapshot.memory.creeps?.[report.economyProbe?.worker ?? ''];
+      if (worker?.shipment?.dependsOn?.some(id => id.startsWith('build:'))) report.economy.crossKind = true;
+      if (worker && !worker.shipment && worker.logisticsRecovery?.reason === 'dependency-timeout') report.economy.released = true;
+    }
+    if (cpuStress && snapshot.memory.bootstrap?.degraded) (report.stress ??= { degradedSeen: false }).degradedSeen = true;
+    if (persistentFailure && i >= 452) {
+      const name = report.persistentFault.name;
+      const state = snapshot.memory.creeps[name];
+      assert(state?.logisticsRecovery?.stopped && state.logisticsRecovery.attempts === 3, 'third dependency failure must remain stopped');
+      assert(!state.shipment, 'stopped worker must not acquire a new shipment');
+      const worker = snapshot.objects.find(o => o.name === name && o.type === 'creep');
+      assert(worker, 'faulted worker must remain alive');
+      if (report.persistentFault.energy !== undefined && worker.store.energy !== report.persistentFault.energy) report.persistentFault.actions++;
+      report.persistentFault.energy = worker.store.energy;
+    }
+    if (logisticsRecovery && i === 351) {
+      check('invalid orders released within two ticks', Object.values(snapshot.memory.creeps ?? {}).every(c => c.shipment?.to !== 'destroyed-target'));
+    }
+    if (logisticsRecovery && i === 401) {
+      check('dependency cycle detected and leases released within two ticks', snapshot.memory.logisticsCycles > 0 && report.cycleInjection.members.every(name => !snapshot.memory.creeps[name]?.shipment?.dependsOn?.length));
+      check('cycle recovery preserves a diagnostic and bounded retry', report.cycleInjection.members.every(name => snapshot.memory.creeps[name]?.logisticsRecovery?.reason === 'dependency-cycle' && snapshot.memory.creeps[name].logisticsRecovery.retryAt <= 420));
+    }
+    if (lifecycle) {
+      const workers = snapshot.objects.filter(o => o.type === 'creep' && o.user === bot.id && !o.spawning);
+      if (multiRoom) for (const worker of (snapshot.roomB ?? []).filter(o => o.type === 'creep' && o.user === bot.id && !o.spawning)) if (!names.has(worker.name)) { names.add(worker.name); (report.multiRoomBirths ??= { W0N1: 0, W0N2: 0 }).W0N2++; }
+      for (const worker of workers) if (!names.has(worker.name)) { names.add(worker.name); births++; if (multiRoom) (report.multiRoomBirths ??= { W0N1: 0, W0N2: 0 }).W0N1++; }
+      if (i > 100) { emptyRun = workers.length ? 0 : emptyRun + 1; maxEmptyRun = Math.max(maxEmptyRun, emptyRun); }
+      const controller = snapshot.objects.find(o => o.type === 'controller');
+      delivered = (controller.level > 1 ? 200 : 0) + (controller.progress ?? 0);
+      controllerIdle = workers.length >= 3 && delivered === lastControllerProgress ? controllerIdle + 1 : 0;
+      maxControllerIdle = Math.max(maxControllerIdle, controllerIdle);
+      lastControllerProgress = delivered;
+      if (i % 100 === 0) console.log(`[lifecycle] tick=${i} workers=${workers.length} progress=${delivered}`);
+      if (i % 100 === 0 || i === tickCount - 1 || economyProbe && i % 10 === 0) { report.ticks.push(snapshot); save(); }
+    } else if (!fairnessProbe) { report.ticks.push(snapshot); save(); }
+    else if (i % 100 === 0 || i === tickCount - 1) { report.ticks.push({ time: snapshot.time, objects: snapshot.objects.filter(o => o.type === 'extension' || o.type === 'creep' || o.type === 'spawn'), ...(multiRoom ? { roomB: snapshot.roomB } : {}), memory: snapshot.memory }); save(); }
+  }
+  if (fairnessProbe) {
+    const delivered = Object.values(report.fairness.delivered);
+    check('all extension consumers receive energy in the engine', delivered.length === 2 && delivered.every(amount => amount > 0));
+    check('engine consumer wait remains bounded', Object.values(report.fairness.maxWait).every(wait => wait <= 200));
+    if (cpuStress) check('cpu pressure reaches the degraded threshold', report.stress?.degradedSeen === true);
+    if (multiRoom) {
+      const first = report.ticks[0], last = report.ticks.at(-1);
+      const mine = (objects) => objects.filter(o => o.type === 'creep' && o.user === bot.id && !o.spawning);
+      const controllerOf = (objects, room) => objects.find(o => o.type === 'controller' && o.room === room);
+      const namespaces = last.memory.logisticsTasks ?? {};
+      check('multi-room sees both controllers as owned', last.memory.bootstrap?.capabilities?.rooms?.W0N1?.owned === true && last.memory.bootstrap?.capabilities?.rooms?.W0N2?.owned === true);
+      check('multi-room keeps both populations alive', mine(last.objects).length >= 2 && mine(last.roomB ?? []).length >= 2);
+      check('multi-room advances both controllers', (controllerOf(last.objects, 'W0N1')?.progress ?? 0) > (controllerOf(first.objects, 'W0N1')?.progress ?? 0) && (controllerOf(last.roomB ?? [], 'W0N2')?.progress ?? 0) > (controllerOf(first.roomB ?? [], 'W0N2')?.progress ?? 0));
+      check('multi-room spawns creeps in both rooms', (report.multiRoomBirths?.W0N1 ?? 0) >= 1 && (report.multiRoomBirths?.W0N2 ?? 0) >= 1);
+      check('multi-room keeps logistics task memory isolated per room', ['W0N1', 'W0N2'].every(room => Object.keys(namespaces[room] ?? {}).some(id => id.startsWith('haul:'))));
+    }
+    report.status = 'passed';
+  } else if (trafficProbe) {
+    const first = report.ticks[0].objects;
+    check('opposing moves swap in the real engine', first.find(o => o.name === 'SwapA').x === 21 && first.find(o => o.name === 'SwapB').x === 20);
+    check('no repeated move after intent flush', report.ticks.at(-1).objects.find(o => o.name === 'SwapA').x === 21);
+    check('stationary occupant blocks the whole dependency chain', first.find(o => o.name === 'ChainA').x === 20 && first.find(o => o.name === 'ChainB').x === 21);
+    const cleared = report.ticks[3].objects;
+    check('chain resumes when the blocking occupant departs', cleared.find(o => o.name === 'ChainA').x === 21 && cleared.find(o => o.name === 'ChainB').x === 22 && cleared.find(o => o.name === 'Blocker').x === 23);
+    report.status = 'passed';
+  } else if (trafficRecovery) {
+    const memory = report.ticks.at(-1).memory.trafficRecovery;
+    const last = memory.positions.at(-1);
+    const exit = memory.positions.findIndex(row => row.t >= 40 && row.b[1] === 18);
+    check('blocker departs through the pocket mouth after release', exit >= 0 && last.b[0] === 31 && last.b[1] === 16);
+    const passed = memory.positions.findIndex((row, index) => index >= exit && row.w[0] === 31 && row.w[1] === 19);
+    check('corridor worker follows the blocker through the pocket', passed >= exit && last.w[0] === 31 && last.w[1] === 20);
+    const bounded = memory.states.flatMap(row => [row.w, row.b, row.s].filter(Boolean)).every(state => state.stuck <= 20 && state.failures <= 6 && state.wait <= 100);
+    check('traffic backoff waits and failures stay bounded', bounded);
+    check('sealed target never moves the creep into the enclosure', memory.positions.every(row => !(row.s[0] === 40 && row.s[1] === 25)));
+    const sealedStates = memory.states.filter(row => row.s);
+    check('sealed target retries after bounded backoffs', sealedStates.length > 0 && Math.max(...sealedStates.map(row => row.s.failures)) >= 2);
+    report.status = 'passed';
+  } else if (economyProbe) {
+    check('economy graph records spawn and build tasks alongside hauls', report.economy.spawnSeen && report.economy.buildSeen);
+    check('cross-kind dependency is recorded and blocks the haul', report.economy.crossKind);
+    check('cross-kind dependency releases within the wait limit', report.economy.released);
+    report.status = 'passed';
+  } else if (lifecycle) {
+    if (persistentFailure) {
+      check('third dependency failure stops new logistics leases through scenario end', report.persistentFault && report.ticks.at(-1).memory.creeps[report.persistentFault.name].logisticsRecovery.reason === 'dependency-cycle');
+      check('stopped logistics worker continues settled resource actions', report.persistentFault.actions >= 2);
+    }
+    report.lifecycle = { births, delivered, maxEmptyRun, maxControllerIdle };
+    if (logistics) check('controller service resumes within 400 ticks with three workers', maxControllerIdle <= 400);
+    check('population established or replaced', recovery || logistics ? births >= 4 : births >= 8);
+    check('controller makes sustained progress', delivered > (recovery || logistics ? 100 : 1000));
+    if (logistics) check('both source containers receive harvested energy', report.ticks.at(-1).objects.filter(o => o.type === 'container' && o.store.energy > 0).length === 2);
+    if (logistics) check('logistics deliveries settle in observed cargo', report.ticks.at(-1).memory.logisticsDelivered > 0);
+    if (logisticsRecovery) check('invalid orders released after observation', Object.values(report.ticks.at(-1).memory.creeps ?? {}).every(c => c.shipment?.to !== 'destroyed-target'));
+    if (logisticsRecovery) check('actual deliveries resume after dependency recovery', report.ticks.at(-1).memory.logisticsDelivered > report.cycleInjection.deliveredBefore);
+    check('production population remains present', maxEmptyRun <= 60);
+    check('heartbeat completed', report.ticks.at(-1).memory.bootstrap?.heartbeat >= tickCount);
+    check('no isolated runtime errors', report.ticks.at(-1).memory.bootstrap?.errors.length === 0);
+    report.status = 'passed';
+  } else {
+  const rows = report.ticks.map((tick) => tick.objects.find((object) => object.name === 'Probe'));
+  const memory = report.ticks.at(-1).memory;
+  check('physics probe executed every tick', memory.probe?.length === 6);
+  check('harvest accepted but not applied synchronously', memory.probe[0].harvest === 0 && memory.probe[0].immediateEnergy === 0);
+  check('harvest settled in engine', rows[0].store.energy === 2);
+  check('RCL1 rejects extension construction', memory.probe[0].limit === -14);
+  check('container limit is 5 at RCL2', memory.probe[0].containers[2] === 5);
+  check('loaded creep enters swamp and gains fatigue', rows[1].x === 21 && rows[1].fatigue > 0);
+  check('fatigue prevents next movement', rows[2].x === 21);
+  check('owned extension site blocks accepted move intent', memory.probe[3].siteMove === 0 && rows[3].x === 14);
+  check('owned road site allows movement', rows[4].x === 15 && rows[4].y === 16);
+  if (fixture.variants[variant].legacyAssets) {
+    check('legacy assets remain present', report.ticks.at(-1).objects.some((object) => object.name === 'LegacyWorker'));
+    check('fixture memory preserved', variant === 'no-memory' ? !memory.creeps?.LegacyWorker?.role : memory.creeps.LegacyWorker.role === 'old-builder');
+  }
+  check('injected assertion validates failure reporting', !injectFailure);
+  report.status = 'passed';
+  }
+} catch (error) {
+  report.status = 'failed';
+  report.error = error.stack;
+  if (bot) report.notifications = await bot.notifications.catch(() => []);
+  process.exitCode = 1;
+} finally {
+  save();
+  server.stop();
+  console.log(`[scenario] ${report.status}: ${report.checks.filter((item) => item.passed).length} checks; ${output}/report.json`);
+  if (report.error) console.error(report.error);
+  // Mockup storage has no complete shutdown API.
+  process.exit(process.exitCode ?? 0);
+}

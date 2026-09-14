@@ -43,7 +43,7 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ['node:*', 'fs', 'path', 'screeps-api'],
+              group: ['node:*', 'fs', 'path', 'screeps-api', '@/game', '@/game/**', '**/game', '**/game/**', '@/colony/**', '**/colony/**', '@/empire/**', '**/empire/**'],
               message: 'The pure-logic layer must stay pure — no I/O, no host APIs.',
             },
           ],
@@ -55,7 +55,7 @@ export default tseslint.config(
   {
     // The engine-facing entrypoint and the node-side tooling legitimately touch
     // engine globals and the filesystem.
-    files: ['src/main.ts', 'scripts/**/*.mjs', 'test/**/*.ts'],
+    files: ['src/main.ts', 'src/game/**/*.ts', 'scripts/**/*.mjs', 'test/**/*.ts'],
     rules: {
       'no-restricted-globals': 'off',
     },
@@ -63,4 +63,3 @@ export default tseslint.config(
 
   prettier,
 );
-

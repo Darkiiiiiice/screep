@@ -12,10 +12,13 @@
  *   - An exception that escapes `loop()` aborts the rest of the tick for every
  *     creep we own, so the body must be wrapped and failures contained.
  *
- * The previous implementation (kernel / domain / game / colony layers) was
- * removed on 2026-09-11 pending a redesign; this is the bare entrypoint the
- * build pipeline and `npm run smoke` need in order to stay exercisable.
+ * M1 delegates engine access to the adapter and pure population decisions to
+ * domain/bootstrap. Existing units are adopted without requiring role flags.
  */
+import { runBootstrap } from './game/bootstrap';
+
 export function loop(): void {
-  // Intentionally empty until the redesign lands.
+  try { runBootstrap(); } catch (error) {
+    console.log(`[M1] entry: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
