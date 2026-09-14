@@ -23,11 +23,13 @@ const economyProbe = args.includes('--economy-probe');
 const populationPressure = args.includes('--population-pressure');
 const cpuStress = args.includes('--cpu-stress');
 const multiRoom = args.includes('--multi-room');
+const maintenanceProbe = args.includes('--maintenance-probe');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
 assert(!trafficRecovery || !lifecycle && !fairnessProbe && !logistics, '--traffic-recovery runs standalone');
 assert(!multiRoom || lifecycle && logistics && fairnessProbe, '--multi-room requires --lifecycle --logistics --fairness-probe');
+assert(!maintenanceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--maintenance-probe requires --lifecycle --logistics');
 const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
@@ -37,7 +39,7 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, tickCount,
   node: process.version,
   versions: Object.fromEntries(['screeps-server-mockup', '@screeps/engine', '@screeps/driver', '@screeps/common'].map((name) => [name, requireEngine(`${name}/package.json`).version])),
   checks: [], ticks: [], logs: [], status: 'running',
@@ -167,6 +169,16 @@ try {
     if (!construction) for (const [x, y] of fixture.sources) await server.world.addRoomObject(fixture.room, 'container', x + 1, y, {
       store: { energy: 0 }, storeCapacity: 2000, hits: 250000, hitsMax: 250000, nextDecayTime: 500,
     });
+  }
+  if (maintenanceProbe) {
+    // Start at RCL2 so the extension planner is unlocked from tick one, and seed
+    // a damaged stocked container (60% hits: repairable, below the urgent line) so
+    // the repair loop and the extension builders run in the same 600-tick window.
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 2, progress: 0 } });
+    await server.world.addRoomObject(fixture.room, 'container', 17, 15, {
+      store: { energy: 300 }, storeCapacity: 2000, hits: 150000, hitsMax: 250000, nextDecayTime: 500,
+    });
+    report.maintenance = { damagedContainer: [17, 15], seededHits: 150000 };
   }
   if (fairnessProbe) {
     await server.world.addRoomObject(fixture.room, 'extension', 26, 25, { user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
@@ -361,12 +373,29 @@ try {
       check('third dependency failure stops new logistics leases through scenario end', report.persistentFault && report.ticks.at(-1).memory.creeps[report.persistentFault.name].logisticsRecovery.reason === 'dependency-cycle');
       check('stopped logistics worker continues settled resource actions', report.persistentFault.actions >= 2);
     }
+    if (maintenanceProbe) {
+      const lastObjects = report.ticks.at(-1).objects;
+      const hitsSeries = report.ticks.map(t => t.objects.find(o => o.type === 'container' && o.x === 17 && o.y === 15)?.hits).filter(h => h !== undefined);
+      // Decay can only subtract; exceeding the seeded hits is direct evidence of repair.
+      check('repair restores the damaged container above its seeded hits', hitsSeries.some(h => h > report.maintenance.seededHits));
+      check('damaged container survives the full window', lastObjects.some(o => o.type === 'container' && o.x === 17 && o.y === 15 && o.hits > 0));
+      // Slot isolation: with 4 workers, repair(1) + build(1) leaves the 2-worker
+      // economy floor; miners are out of scope here, so only assert the fixtures
+      // this probe owns — container-energy assertions belong to test:logistics.
+      const fixtureSite = lastObjects.find(o => o.type === 'constructionSite' && o.x === 15 && o.y === 16);
+      const builtExtension = lastObjects.some(o => o.type === 'extension' && o.x === 15 && o.y === 16);
+      check('generalized builders make progress on the legacy extension site', (fixtureSite?.progress ?? 0) > 0 || builtExtension);
+      const ringPlacements = lastObjects.filter(o => o.structureType === 'extension' && (o.type === 'constructionSite' || o.type === 'extension') && !(o.x === 15 && o.y === 16));
+      check('planner places extension sites around the spawn at RCL2', ringPlacements.length >= 1);
+    }
     report.lifecycle = { births, delivered, maxEmptyRun, maxControllerIdle };
     if (logistics) check('controller service resumes within 400 ticks with three workers', maxControllerIdle <= 400);
     check('population established or replaced', recovery || logistics ? births >= 4 : births >= 8);
     check('controller makes sustained progress', delivered > (recovery || logistics ? 100 : 1000));
-    if (logistics) check('both source containers receive harvested energy', report.ticks.at(-1).objects.filter(o => o.type === 'container' && o.store.energy > 0).length === 2);
-    if (logistics) check('logistics deliveries settle in observed cargo', report.ticks.at(-1).memory.logisticsDelivered > 0);
+    // The two-worker economy floor cannot also cover repair + build slots; the
+    // maintenance probe owns its own fixture assertions instead.
+    if (logistics && !maintenanceProbe) check('both source containers receive harvested energy', report.ticks.at(-1).objects.filter(o => o.type === 'container' && o.store.energy > 0).length === 2);
+    if (logistics && !maintenanceProbe) check('logistics deliveries settle in observed cargo', report.ticks.at(-1).memory.logisticsDelivered > 0);
     if (logisticsRecovery) check('invalid orders released after observation', Object.values(report.ticks.at(-1).memory.creeps ?? {}).every(c => c.shipment?.to !== 'destroyed-target'));
     if (logisticsRecovery) check('actual deliveries resume after dependency recovery', report.ticks.at(-1).memory.logisticsDelivered > report.cycleInjection.deliveredBefore);
     check('production population remains present', maxEmptyRun <= 60);

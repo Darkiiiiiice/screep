@@ -1,6 +1,6 @@
 # Screeps: World 全流程自动化开发计划
 
-> 版本：v2.1 · 2026-09-11 · 状态：M0、M1 核心验收已完成，进入 M2；M1 的跨阶段压力场景仍由后续里程碑覆盖。
+> 版本：v2.1 · 2026-09-11 · 状态：M0、M1、M2 已完成本地验收，进入 M3（建造、维护与基础防御）；M1 的跨阶段压力场景仍由后续里程碑覆盖。
 > 目标：构建能自行生存、发展、作战、扩张和恢复的 AI。完成首次接入后，正常游戏过程不依赖人工摆建筑、设置旗帜、调整角色数量或逐次下达任务。
 > 历史实测与旧设计保存在 [v1 归档](docs/PLAN-v1-archive.md)。本文中的里程碑均为新实现的待办，不沿用旧版完成标记。
 
@@ -365,6 +365,9 @@ flowchart TD
 - [x] M1：接入孵化时间预算、任务无进展检测、瓶颈诊断、旧单位接管与心跳字段。
 - [x] M2：依据结果加入定点矿工、运输订单和交通管理。统一移动仲裁、对向互换引擎探针、600 tick 恢复、3100 tick 自动施工回归、封闭窄路/不可达交通恢复（`--traffic-recovery` 探针 5 项检查，`src/game/traffic.ts` 主寻路回归引擎 findPathTo 语义 + 封死目标驻停与有界退避）已通过。
 - [x] M2：实现任务依赖环检测、预约恢复和饥饿调度。运输订单依赖环、有限退避和连续三次故障终止通过 600 tick 引擎场景 15 项检查；运输消费者等待权重与有限服务窗口接入，2000 tick 领域竞争与 600 tick 多消费者引擎竞争通过；haul/build/spawn/upgrade 四类岗位统一为运行时经济任务图，跨岗位依赖注入释放通过引擎探针，孵化等待超时按可负担体型触发应急出生；CPU 预算压至 10 的降级场景验证不饥饿、等待有界；多房间公平验收（每房间任务记忆命名空间隔离，`--multi-room` 探针 5 项检查：双房间 owned、人口、双控制器进度、双房间出生、任务记忆互不覆盖）。
+- [x] M3：容器维修纵切（§3.5 预防性维护起步）。`src/domain/maintenance.ts` 纯决策（urgent<25% 抢占、0.8 入队阈值、稳定排序），`runLogistics` 接线：非紧急保留 2 工人生存地板、urgent 暂停工地施工、空载修理工先取能、失效/痊愈目标无条件释放。56→60 项单测通过；引擎物理级维修证据由 `test:maintenance` 提供（见引擎回归行）。
+- [x] M3：extension 自动布局（RCL 解锁自主发展起步）。`src/domain/planning.ts` 环形扫描（range≥2 不封 spawn 出口、确定性排序、跳过占位、越界裁剪）+ `preservesConnectivity` 割点守卫（候选格的可达邻格在候选被占用后必须互达，否则跳过——extension 工地自放置起即为障碍，复刻 v1「工地封路」缺陷类的防线）；`runLogistics` 每 tick 至多铺 1 个 extension 工地直至 `CONTROLLER_STRUCTURES` 上限；施工循环从容器工地泛化为全部工地且容器优先，`containerSite` 记忆字段语义不变。bootstrap 双 WORK 身体触发保持容器工地专属，避免扰动 M2 已录制时间线。
+- [x] M3 引擎回归（darwin-arm64 本地引擎，Node v24.21.0 + clang；`engine-setup.sh` 已跨平台化，isolated-vm 6.2.0 预编译 + `-include exception` 兜底）：`test:maintenance`（RCL2 种子 + 60% 受损容器：维修跨过种子血线、泛化 builder 推进遗留 extension 工地、环形规划器落新工地）+ 16 个场景变体 **116/116 检查全绿**（含 11 个 M2 既有变体、三厂 fresh/legacy/no-memory）。回归暴露并修复两处真实缺陷：①builder 泛化后 3 工人房间双 builder 抢占升级/矿位（`--multi-room` 抓出：W0N2 controller 0 进度）——容器工地保留 2 工人生存地板，extension 等成长工地改为「真盈余」施工：仅在维修/采矿/搬运全部认领后由空闲工人承建（`--logistics-construction` 曾抓出 source B 容器 0 能量，即 ext 工地吞噬矿位），且 extension 铺设/施工以「双源容器就位」为先决、urgent 维修期间暂停。新增 `test:maintenance` 命令。
 
 ## 6. 自动化验证与发布
 

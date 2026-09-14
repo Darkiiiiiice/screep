@@ -1,8 +1,10 @@
 import { LogisticsBoard } from '../domain/logistics';
 import { planEconomy } from '../domain/economy';
 import { rankServices, settleService, type ServiceState } from '../domain/service';
+import { REPAIR_THRESHOLD, selectRepairTarget } from '../domain/maintenance';
 import { type TrafficState } from '../domain/traffic';
 import { requestMove as travel } from './traffic';
+import { extensionTiles, preservesConnectivity } from '../domain/planning';
 
 declare global {
   interface CreepMemory {
@@ -10,9 +12,10 @@ declare global {
     shipment?: { from: string; to: string; expires: number; dependsOn?: string[]; waitingSince?: number };
     logisticsRecovery?: { attempts: number; retryAt: number; reason: string; stopped: boolean };
     delivery?: { tick: number; energy: number; amount: number; target?: string };
+    repairTarget?: string;
+    building?: boolean;
     containerBuilder?: boolean;
     containerSite?: string;
-    building?: boolean;
     traffic?: TrafficState;
   }
   interface Memory {
@@ -100,7 +103,12 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
       delete creep.memory.shipment;
     }
     if (creep.memory.shipment && creep.memory.shipment.expires <= Game.time) delete creep.memory.shipment;
-    if ((creep.memory.traffic?.retryAt ?? 0) > Game.time) handled.add(creep.name);
+    // A backed-off creep cannot act this tick; retaining its shipment would keep a
+    // reservation (possibly an injected invalid one) alive past the release window.
+    if ((creep.memory.traffic?.retryAt ?? 0) > Game.time) {
+      delete creep.memory.shipment;
+      handled.add(creep.name);
+    }
   }
   // Recovered workers fall back to bootstrap while waiting; terminal failures remain
   // diagnosable and do not repeatedly acquire the same logistics reservation.
@@ -133,12 +141,12 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     }
   }
   const containers = room.find(FIND_STRUCTURES).filter((s): s is StructureContainer => s.structureType === STRUCTURE_CONTAINER);
+  const allSites = room.find(FIND_MY_CONSTRUCTION_SITES);
   // Keep the mining plan self-starting: request a container beside each source
   // when the room has construction capacity and no compatible container exists.
   for (const source of sources) {
     if (containers.some(container => container.pos.isNearTo(source))) continue;
-    const sites = room.find(FIND_MY_CONSTRUCTION_SITES);
-    if (sites.some(site => site.structureType === STRUCTURE_CONTAINER && site.pos.isNearTo(source))) continue;
+    if (allSites.some(site => site.structureType === STRUCTURE_CONTAINER && site.pos.isNearTo(source))) continue;
     const positions: RoomPosition[] = [];
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
       const x = source.pos.x + dx, y = source.pos.y + dy;
@@ -153,15 +161,85 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
       if (room.createConstructionSite(position, STRUCTURE_CONTAINER) === OK) break;
     }
   }
+  // RCL2+ unlocks extensions; grow toward the controller's structure cap one
+  // site per tick on a deterministic ring around the spawn — but only once every
+  // source has a built container beside it. Extensions are growth; the mining
+  // plan is survival, and builders above the two-worker floor are scarce.
+  const miningSelfSufficient = sources.every(source => containers.some(container => container.pos.isNearTo(source)));
+  const rcl = room.controller?.level ?? 0;
+  const extensionCap = CONTROLLER_STRUCTURES[STRUCTURE_EXTENSION]?.[rcl] ?? 0;
+  const extensionOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_EXTENSION).length;
+  const extensionPlanned = allSites.filter(s => s.structureType === STRUCTURE_EXTENSION).length;
+  if (miningSelfSufficient && extensionCap - extensionOwned - extensionPlanned > 0 && spawns[0]) {
+    const free = (x: number, y: number) => {
+      const position = new RoomPosition(x, y, room.name);
+      return position.lookFor(LOOK_TERRAIN)[0] !== 'wall'
+        && position.lookFor(LOOK_STRUCTURES).length === 0
+        && position.lookFor(LOOK_CONSTRUCTION_SITES).length === 0;
+    };
+    const passable = (x: number, y: number) => x >= 0 && x < 50 && y >= 0 && y < 50 && free(x, y);
+    // Scan a small candidate window: cut vertices (corridor/pocket entrances)
+    // are skipped, then the first surviving tile gets the one site of this tick.
+    for (const tile of extensionTiles({ x: spawns[0].pos.x, y: spawns[0].pos.y }, free, 8)) {
+      if (!preservesConnectivity(tile, passable)) continue;
+      if (room.createConstructionSite(tile.x, tile.y, STRUCTURE_EXTENSION) === OK) break;
+    }
+  }
   const ranked = rankServices(sinks.map(s => ({ id: s.id, priority: s.structureType === STRUCTURE_SPAWN ? 10 : 5,
     emergency: mobile.length < 2 && s.structureType === STRUCTURE_SPAWN })), services, Game.time);
-  const containerSites = room.find(FIND_MY_CONSTRUCTION_SITES).filter(s => s.structureType === STRUCTURE_CONTAINER);
-  for (const creep of mobile) if (!containerSites.some(s => s.id === creep.memory.containerSite)) {
+  const rclLevel = room.controller?.level ?? 0;
+  const ownedByType = new Map<string, number>();
+  for (const s of room.find(FIND_MY_STRUCTURES)) ownedByType.set(s.structureType, (ownedByType.get(s.structureType) ?? 0) + 1);
+  const plannedByType = new Map<BuildableStructureConstant, number>();
+  for (const s of allSites) plannedByType.set(s.structureType, (plannedByType.get(s.structureType) ?? 0) + 1);
+  for (const creep of mobile) if (!allSites.some(s => s.id === creep.memory.containerSite)) {
     delete creep.memory.containerBuilder;
     delete creep.memory.containerSite;
   }
+  const containerSites = allSites.filter(s => s.structureType === STRUCTURE_CONTAINER);
+  const extensionSites = allSites.filter(s => s.structureType !== STRUCTURE_CONTAINER);
+  // Repair flags are cleaned unconditionally: a destroyed or healed target must
+  // not permanently exclude its former worker from future assignments.
+  for (const creep of mobile) {
+    if (!creep.memory.repairTarget) continue;
+    const target = containers.find(c => c.id === creep.memory.repairTarget);
+    if (!target || target.hits / target.hitsMax >= REPAIR_THRESHOLD) delete creep.memory.repairTarget;
+  }
+  const repair = selectRepairTarget(containers.map(container => ({ id: container.id, structureType: container.structureType,
+    hits: container.hits, hitsMax: container.hitsMax, critical: true })));
+  const urgent = repair !== undefined && repair.urgent;
+  if (repair !== undefined && (mobile.length - handled.size > (urgent ? 1 : 2))) {
+    const available = eligible.filter(c => !handled.has(c.name));
+    const target = containers.find(c => c.id === repair.id)!;
+    const worker = available.find(c => c.memory.repairTarget === repair.id)
+      ?? available.filter(c => !c.memory.repairTarget).sort((a, b) => b.getActiveBodyparts(WORK) - a.getActiveBodyparts(WORK) || a.pos.getRangeTo(target) - b.pos.getRangeTo(target))[0];
+    if (worker) {
+      worker.memory.repairTarget = repair.id;
+      delete worker.memory.minerSource;
+      delete worker.memory.shipment;
+      delete worker.memory.containerSite;
+      delete worker.memory.containerBuilder;
+      handled.add(worker.name);
+      if (!worker.store.energy) {
+        const container = worker.pos.findClosestByRange(containers.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
+        if (container) {
+          if (worker.withdraw(container, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) travel(worker, container.pos, 1);
+        } else {
+          const source = worker.pos.findClosestByRange(sources.filter(s => s.energy > 0));
+          if (source) {
+            if (worker.harvest(source) === ERR_NOT_IN_RANGE) travel(worker, source.pos, 1);
+          }
+        }
+      } else if (worker.repair(target) === ERR_NOT_IN_RANGE) travel(worker, target.pos, 3);
+    }
+  }
   for (const site of containerSites) {
-    if (mobile.length - handled.size <= 2 || (room.controller?.ticksToDowngrade ?? 0) <= 3000) break;
+    // Container sites are income-critical, so they may spend the two-worker
+    // economy floor. Urgent repair and controller emergencies pause building.
+    const cap = CONTROLLER_STRUCTURES[site.structureType]?.[rclLevel] ?? 0;
+    const planned = (plannedByType.get(site.structureType) ?? 0) - 1;
+    if (cap - (ownedByType.get(site.structureType) ?? 0) - planned <= 0) continue;
+    if (urgent || mobile.length - handled.size <= 2 || (room.controller?.ticksToDowngrade ?? 0) <= 3000) break;
     const available = eligible.filter(c => !handled.has(c.name));
     const builder = available.find(c => c.memory.containerSite === site.id) ?? available.filter(c => !c.memory.containerSite).sort((a, b) => b.getActiveBodyparts(WORK) - a.getActiveBodyparts(WORK) || a.pos.getRangeTo(site) - b.pos.getRangeTo(site))[0];
     if (builder) {
@@ -224,6 +302,31 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     const source = containers.find(c => c.id === shipment.from)!;
     if (creep.withdraw(source, RESOURCE_ENERGY, shipment.amount) === ERR_NOT_IN_RANGE) travel(creep, source.pos, 1);
     handled.add(creep.name);
+  }
+  // Growth sites (extensions, roads, …) build only from genuine surplus: workers
+  // still unhandled after repair, mining, and hauling have claimed theirs. Urgent
+  // repair pauses this entirely; the RCL cap keeps phantom sites unbuilt.
+  if (!urgent) for (const site of extensionSites) {
+    const cap = CONTROLLER_STRUCTURES[site.structureType]?.[rclLevel] ?? 0;
+    const planned = (plannedByType.get(site.structureType) ?? 0) - 1;
+    if (cap - (ownedByType.get(site.structureType) ?? 0) - planned <= 0) continue;
+    const surplus = eligible.filter(c => !handled.has(c.name));
+    const builder = surplus.find(c => c.memory.containerSite === site.id)
+      ?? surplus.filter(c => !c.memory.containerSite).sort((a, b) => b.getActiveBodyparts(WORK) - a.getActiveBodyparts(WORK) || a.pos.getRangeTo(site) - b.pos.getRangeTo(site))[0];
+    if (!builder) continue;
+    builder.memory.containerBuilder = true;
+    builder.memory.containerSite = site.id;
+    delete builder.memory.minerSource;
+    delete builder.memory.shipment;
+    handled.add(builder.name);
+    if (!builder.store.energy) builder.memory.building = false;
+    if (!builder.store.getFreeCapacity(RESOURCE_ENERGY)) builder.memory.building = true;
+    if (builder.memory.building) {
+      if (builder.build(site) === ERR_NOT_IN_RANGE) travel(builder, site.pos, 3);
+    } else {
+      const source = site.pos.findClosestByRange(sources.filter(s => s.energy > 0));
+      if (source && builder.harvest(source) === ERR_NOT_IN_RANGE) travel(builder, source.pos, 1);
+    }
   }
   return handled;
 }

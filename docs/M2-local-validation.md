@@ -1,6 +1,6 @@
 # M2 本地验证记录
 
-M2 尚未完成，实验开关仍为 `Memory.logisticsEnabled`。
+M2 已完成本地验收（69 项场景检查全绿）；实验开关仍为 `Memory.logisticsEnabled`，默认关闭。
 
 ## 已通过
 

@@ -55,6 +55,7 @@ it('keeps per-room task memory isolated when sibling rooms run on shared memory'
   vi.stubGlobal('FIND_MY_SPAWNS', 2);
   vi.stubGlobal('FIND_MY_CONSTRUCTION_SITES', 3);
   vi.stubGlobal('FIND_STRUCTURES', 4);
+  vi.stubGlobal('CONTROLLER_STRUCTURES', { extension: { 0: 0, 1: 0, 2: 5 } });
   const memory: { logisticsTasks?: Record<string, Record<string, unknown>> } = {};
   vi.stubGlobal('Memory', memory);
   const creep = (name: string) => ({
@@ -66,6 +67,7 @@ it('keeps per-room task memory isolated when sibling rooms run on shared memory'
   const room = (name: string) => ({
     name,
     controller: { ticksToDowngrade: 20000 },
+    createConstructionSite: () => 0,
     find: (type: number) => type === 1 ? [{ structureType: 'spawn', id: 'spawn-id', store: { getFreeCapacity: () => 10 } }] : type === 2 ? [{ id: 'spawn-id' }] : [],
   });
   runLogistics(room('W0N1') as unknown as Room, [creep('worker-a')] as unknown as Creep[], [], {});

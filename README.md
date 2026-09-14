@@ -52,7 +52,7 @@ M1 本地代码已具备采集、供能、孵化和升级能力，但本地改�
 
 ### M1 状态与验证
 
-M2 开发中：`Memory.logisticsEnabled = true` 可启用容器自动施工、定点采矿、孵化补能预约、统一移动仲裁和控制器升级服务窗口，默认关闭。600 tick 恢复与对向互换引擎探针已通过；完整任务依赖环、封闭窄路恢复及长期验收仍待完成。测试命令：`npm run test:logistics`、`npm run test:logistics-construction`、`npm run test:traffic`。详细证据见 [M2 本地验证](docs/M2-local-validation.md)。
+M2 已完成本地验收（默认关闭，`Memory.logisticsEnabled = true` 启用容器自动施工、定点采矿、孵化补能预约、统一移动仲裁和控制器升级服务窗口）：11 个场景变体 69 项检查全绿，详见 [M2 本地验证](docs/M2-local-validation.md)。测试命令：`npm run test:logistics`、`npm run test:logistics-construction`、`npm run test:traffic`。当前进入 M3。
 
 `Memory.bootstrap` 保存按能力接管的工作单位状态、房间人口需求、孵化储备、阻塞原因、有限错误记录和 `heartbeat`。全局缓存清空不影响恢复；旧的 `Memory.creeps` 角色不会阻止接管。每 20 tick 输出 segment 0 统计。
 

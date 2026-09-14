@@ -4,7 +4,8 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 
-const node = process.env.SCREEPS_ENGINE_NODE ?? resolve(homedir(), '.cache/screeps-node24/node-v24.21.0-linux-x64/bin/node');
+const dist = process.platform === 'darwin' && process.arch === 'arm64' ? 'darwin-arm64' : 'linux-x64';
+const node = process.env.SCREEPS_ENGINE_NODE ?? resolve(homedir(), `.cache/screeps-node24/node-v24.21.0-${dist}/bin/node`);
 if (!existsSync(node) || !existsSync('.engine/node_modules/screeps-server-mockup')) {
   console.error('[scenario] engine missing; run npm run engine');
   process.exit(1);
