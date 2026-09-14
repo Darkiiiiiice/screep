@@ -6,3 +6,4 @@ dist/
 .engine/
 server/
 artifacts/
+.DS_Store
