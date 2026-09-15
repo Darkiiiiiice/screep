@@ -175,14 +175,21 @@ try {
     });
   }
   if (maintenanceProbe) {
-    // Start at RCL2 so the extension planner is unlocked from tick one, and seed
-    // a damaged stocked container (60% hits: repairable, below the urgent line) so
-    // the repair loop and the extension builders run in the same 600-tick window.
+    // Start at RCL2 so the extension planner is unlocked from tick one, and run
+    // the repair loop and the extension builders in the same 600-tick window.
     await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 2, progress: 0 } });
-    await server.world.addRoomObject(fixture.room, 'container', 17, 15, {
-      store: { energy: 300 }, storeCapacity: 2000, hits: 150000, hitsMax: 250000, nextDecayTime: 500,
+    // Damage the FIRST source's miner container (40% hits: repairable, below the
+    // urgent line): it is income-critical by source adjacency, so the repair loop
+    // prefers it over dead weight and funds itself from miner throughput.
+    await db['rooms.objects'].update({ type: 'container', room: fixture.room, x: fixture.sources[0][0] + 1, y: fixture.sources[0][1] }, { $set: { hits: 100000 } });
+    // A decayed EMPTY legacy container far from any source (the live W35S2
+    // deadlock shape): at 20% hits it sits below the urgent line, but with no
+    // income it must never pause construction — the build checks below become
+    // the regression gate for the income-scoped urgent repair rule.
+    await server.world.addRoomObject(fixture.room, 'container', 20, 44, {
+      store: { energy: 0 }, storeCapacity: 2000, hits: 50000, hitsMax: 250000, nextDecayTime: 500,
     });
-    report.maintenance = { damagedContainer: [17, 15], seededHits: 150000 };
+    report.maintenance = { damagedContainer: [fixture.sources[0][0] + 1, fixture.sources[0][1]], seededHits: 100000, legacyContainer: [20, 44], legacySeededHits: 50000 };
   }
   if (defenseProbe) {
     // RCL3 (tower cap 1) + a stocked tower + an armed Invader raider: the tower
@@ -430,10 +437,11 @@ try {
     }
     if (maintenanceProbe) {
       const lastObjects = report.ticks.at(-1).objects;
-      const hitsSeries = report.ticks.map(t => t.objects.find(o => o.type === 'container' && o.x === 17 && o.y === 15)?.hits).filter(h => h !== undefined);
+      const [dcX, dcY] = report.maintenance.damagedContainer;
+      const hitsSeries = report.ticks.map(t => t.objects.find(o => o.type === 'container' && o.x === dcX && o.y === dcY)?.hits).filter(h => h !== undefined);
       // Decay can only subtract; exceeding the seeded hits is direct evidence of repair.
-      check('repair restores the damaged container above its seeded hits', hitsSeries.some(h => h > report.maintenance.seededHits));
-      check('damaged container survives the full window', lastObjects.some(o => o.type === 'container' && o.x === 17 && o.y === 15 && o.hits > 0));
+      check('repair restores the damaged income container above its seeded hits', hitsSeries.some(h => h > report.maintenance.seededHits));
+      check('damaged container survives the full window', lastObjects.some(o => o.type === 'container' && o.x === dcX && o.y === dcY && o.hits > 0));
       // Slot isolation: with 4 workers, repair(1) + build(1) leaves the 2-worker
       // economy floor; miners are out of scope here, so only assert the fixtures
       // this probe owns — container-energy assertions belong to test:logistics.
@@ -442,6 +450,13 @@ try {
       check('generalized builders make progress on the legacy extension site', (fixtureSite?.progress ?? 0) > 0 || builtExtension);
       const ringPlacements = lastObjects.filter(o => o.structureType === 'extension' && (o.type === 'constructionSite' || o.type === 'extension') && !(o.x === 15 && o.y === 16));
       check('planner places extension sites around the spawn at RCL2', ringPlacements.length >= 1);
+      // The empty legacy container sits below the urgent line from seed to end;
+      // any extension progress during the window proves it never preempted.
+      const legacySeries = report.ticks.map(t => t.objects.find(o => o.type === 'container' && o.x === 20 && o.y === 44)?.hits).filter(h => h !== undefined);
+      const legacyBelowUrgent = legacySeries.some(h => h < report.maintenance.legacySeededHits * 1.25);
+      check('construction advances while an empty legacy container sits below the urgent line',
+        legacyBelowUrgent && ((fixtureSite?.progress ?? 0) > 0 || builtExtension));
+
     }
     if (defenseProbe) {
       const series = (type, name) => report.ticks

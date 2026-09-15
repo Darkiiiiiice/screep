@@ -3,6 +3,9 @@ export interface RepairableStructure {
   structureType: string;
   hits: number;
   hitsMax: number;
+  /** Income-critical: earns or stores revenue (stocked, or the miner's transfer
+   * target). Only critical structures may preempt construction when decayed;
+   * dead weight queues for idle labor. Callers decide, per PLAN §3.5 关键结构. */
   critical: boolean;
 }
 
@@ -14,7 +17,7 @@ export interface RepairSelection {
 
 /** Below this ratio a structure enters the repair queue; walls are never passed in. */
 export const REPAIR_THRESHOLD = 0.8;
-/** Below this ratio repair preempts construction. */
+/** Below this ratio a CRITICAL structure's repair preempts construction. */
 export const URGENT_REPAIR_THRESHOLD = 0.25;
 
 /**
@@ -32,7 +35,7 @@ export function selectRepairTarget(structures: RepairableStructure[]): RepairSel
     if (structure.hits < 0 || structure.hits >= structure.hitsMax) continue;
     const ratio = structure.hits / structure.hitsMax;
     if (ratio >= REPAIR_THRESHOLD) continue;
-    const urgent = ratio < URGENT_REPAIR_THRESHOLD;
+    const urgent = ratio < URGENT_REPAIR_THRESHOLD && structure.critical;
     if (!best) {
       best = structure;
       bestRatio = ratio;

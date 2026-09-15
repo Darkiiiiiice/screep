@@ -252,8 +252,13 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   // once it exists (RCL4). Withdrawals read it without pulling from the haul loops.
   const storage = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureStorage => s.structureType === STRUCTURE_STORAGE && s.store.getUsedCapacity(RESOURCE_ENERGY) > 0)[0];
   const stockpiles = [...containers, ...(storage ? [storage] : [])];
+  // Urgent repair preemption is reserved for income containers — the miner's
+  // transfer target per source, or anything holding energy. An empty legacy
+  // container still queues for idle repair but never pauses construction.
+  const incomeContainers = new Set(sources.map(source => containers.find(c => c.pos.isNearTo(source))?.id).filter(id => id !== undefined));
   const repair = selectRepairTarget(containers.map(container => ({ id: container.id, structureType: container.structureType,
-    hits: container.hits, hitsMax: container.hitsMax, critical: true })));
+    hits: container.hits, hitsMax: container.hitsMax,
+    critical: incomeContainers.has(container.id) || container.store.getUsedCapacity(RESOURCE_ENERGY) > 0 })));
   const urgent = repair !== undefined && repair.urgent;
   if (repair !== undefined && (mobile.length - handled.size > (urgent ? 1 : 2))) {
     const available = eligible.filter(c => !handled.has(c.name));
