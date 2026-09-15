@@ -101,7 +101,7 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
   vi.stubGlobal('CONTROLLER_STRUCTURES', {
     extension: { 1: 0, 2: 5, 3: 10, 4: 20 },
     container: { 1: 5, 2: 5, 3: 5, 4: 5 },
-    tower: { 1: 0, 2: 0, 3: 1, 4: 1, 5: 2 },
+    tower: { 1: 0, 2: 0, 3: 1, 4: 2 },
     storage: { 1: 0, 2: 0, 3: 0, 4: 1 },
   });
   const room = {
