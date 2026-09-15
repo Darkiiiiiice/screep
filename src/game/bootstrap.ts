@@ -118,6 +118,10 @@ export function runBootstrap(): void {
   if (state.schema !== 1) throw new Error(`unsupported bootstrap schema ${state.schema}`);
   if (Game.time % 25 === 0) {
     for (const name of Object.keys(state.workers)) if (!Game.creeps[name]) delete state.workers[name];
+    // Engine creep memory: claims (minerSource/containerBuilder/repairTarget)
+    // outlive their owners without this sweep; spawning creeps are safe because
+    // Game.creeps lists them from spawnCreep on.
+    for (const name of Object.keys(Memory.creeps ?? {})) if (!Game.creeps[name]) delete Memory.creeps[name];
   }
   const rooms = Object.values(Game.rooms).filter(room => room.controller?.my).sort((a, b) => a.name.localeCompare(b.name));
   const limit = Math.min(Game.cpu.tickLimit ?? Game.cpu.limit, Game.cpu.limit);
