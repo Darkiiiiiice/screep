@@ -123,6 +123,18 @@ M2 已完成本地验收（69 项场景检查全绿）；实验开关仍为 `Mem
 - 场景快照新增 `roomB` 字段；`--economy-probe` 读取任务记忆改为聚合各房间命名空间。
 - 修复后完整回归 11 个场景变体（含 multi-room）共 69 项检查全部通过；40 项单测、typecheck、lint、build 通过。
 
+## 阶段建设者调度修复（progression-probe 驱动）
+
+- 症状：RCL2→RCL4 连续发展验收中 storage 工地 0 进度——工人工位标记被 miner 循环抢占、失效/超容工地标记不释放、旧阶段工地吸干全部建筑工人。
+- 修复（src/game/logistics.ts，均带注释）：
+  1. miner 循环跳过已标记 `containerSite` 的施工工人（抢占后施工循环永远无法回收）。
+  2. 每 tick 每工地只允许一名建筑工；重复粘滞标记视为陈旧并清除。
+  3. 超出控制器容量上限的幽灵工地释放其建筑工（不再空守永不完工的工地）。
+  4. 旧阶段工地共享有界建筑工池（塔阶段 2、storage 阶段 3），当前阶段工地始终保有可申领工人；塔/storage 工地可直接抢占旧阶段建筑工。
+  5. 当前阶段工地豁免于"至少留一名搬运工"下限。
+- 场景计时：进度探针 RCL2 阶段窗口 3000→3200 tick（实测 1-2 建筑工速率下第五个 extension 需约 2500 tick），检查点 2999→3199。
+- 验证：progression-probe 12 项检查通过；14 个场景脚本 + 69 项单测 + typecheck/lint/build/smoke 全绿。报告：`artifacts/scenarios/fresh-1789444458578-96124/report.json`。提交 2c05742。
+
 ```sh
 npm run test:traffic-recovery
 npm run test:logistics
