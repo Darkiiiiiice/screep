@@ -52,9 +52,16 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     inbound.set(to, names);
   }
   // Towers join the sink list so haulers refuel them; they rank between spawn
-  // and extensions because a dry tower is a dead defense (PLAN §3.7).
-  const sinks = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension | StructureTower =>
-    (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION || s.structureType === STRUCTURE_TOWER)
+  // and extensions because a dry tower is a dead defense (PLAN §3.7). Storage
+  // is the overflow buffer: it only accepts deliveries once every spawn and
+  // extension is full, so the RCL4 reserve fills from surplus instead of
+  // competing with the running economy.
+  const spawnBufferFull = room.find(FIND_MY_STRUCTURES).every(s =>
+    (s.structureType !== STRUCTURE_SPAWN && s.structureType !== STRUCTURE_EXTENSION)
+    || s.store.getFreeCapacity(RESOURCE_ENERGY) === 0);
+  const sinks = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension | StructureTower | StructureStorage =>
+    (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION || s.structureType === STRUCTURE_TOWER
+      || (s.structureType === STRUCTURE_STORAGE && spawnBufferFull))
     && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
   const spawns = room.find(FIND_MY_SPAWNS);
   const priorService = Memory.controllerService?.[room.name];
@@ -186,12 +193,13 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   // (RCL4 buffer). Placement keys on OWNED progress; a tower that exists as a
   // site unlocks storage, and once the tower is owned or placed the extension
   // branch resumes toward the 10/20 caps so spawn capacity keeps growing.
-  // Unfinished sites of earlier stages build in parallel via sticky builders.
+  // The resume branch is bounded to one pending extension site: with ~14
+  // sites queued the one-off stage sites starve for builders.
   const growthType: BuildableStructureConstant | undefined =
     extensionCap - extensionOwned - extensionPlanned > 0 && extensionOwned < 5 ? STRUCTURE_EXTENSION
     : towerCap - towerOwned - towerPlanned > 0 ? STRUCTURE_TOWER
     : (towerOwned + towerPlanned > 0) && storageCap - storageOwned - storagePlanned > 0 ? STRUCTURE_STORAGE
-    : (towerOwned + towerPlanned > 0) && extensionCap - extensionOwned - extensionPlanned > 0 ? STRUCTURE_EXTENSION
+    : (towerOwned + towerPlanned > 0) && extensionCap - extensionOwned - extensionPlanned > 0 && extensionPlanned === 0 ? STRUCTURE_EXTENSION
       : undefined;
   const growthOwned = growthType === STRUCTURE_EXTENSION ? extensionOwned
     : growthType === STRUCTURE_TOWER ? towerOwned : storageOwned;
@@ -309,6 +317,11 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     if (!miner) continue;
     handled.add(miner.name);
     miner.memory.minerSource = source.id;
+    // Symmetric with the builder path deleting minerSource: a claimed miner
+    // drops any stale builder flags so the one-builder-per-site guard and the
+    // sticky-flag cleanup never see a phantom builder.
+    delete miner.memory.containerSite;
+    delete miner.memory.containerBuilder;
     delete miner.memory.shipment;
     if (!miner.pos.isEqualTo(container.pos)) { travel(miner, container.pos, 0); continue; }
     if (miner.store.energy > 0) miner.transfer(container, RESOURCE_ENERGY);
@@ -346,16 +359,16 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     // gets one builder.
     if (mobile.length - handled.size <= 1
       && site.structureType !== (storagePlanned > 0 && storageOwned === 0 ? STRUCTURE_STORAGE : towerPlanned > 0 && towerOwned === 0 ? STRUCTURE_TOWER : growthType)) break;
-    // Builder priority is derived from PLACED sites, not from the placement
-    // chain: `growthType` flips back to extensions while the tower is still a
-    // site, which would starve the tower — and later the storage — of any
-    // builder. With a storage site placed: storage ∞, others pooled at 3.
-    // With a tower site placed: tower ∞, others pooled at 2.
-    const stagePool = storagePlanned > 0 && storageOwned === 0
-      ? (site.structureType === STRUCTURE_STORAGE ? Infinity : 3)
-      : towerPlanned > 0 && towerOwned === 0
-        ? (site.structureType === STRUCTURE_TOWER ? Infinity : 2)
-        : Infinity;
+    // Older-stage (extension) sites share a bounded builder pool so a placed
+    // stage unlock always has claimable workers. The pool caps ONLY extension
+    // sites — tower and storage sites are never capped (a tower-then-storage
+    // visit order would otherwise exhaust the pool before the storage).
+    // With a storage site placed: extensions pool at 3. With a tower site
+    // placed: extensions pool at 2.
+    const stagePool = site.structureType !== STRUCTURE_EXTENSION ? Infinity
+      : storagePlanned > 0 && storageOwned === 0 ? 3
+      : towerPlanned > 0 && towerOwned === 0 ? 2
+      : Infinity;
     if (mobile.filter(c => handled.has(c.name) && c.memory.containerSite && c.memory.containerSite !== site.id
       && extensionSites.some(s => s.id === c.memory.containerSite)).length >= stagePool) continue;
     const surplus = eligible.filter(c => !handled.has(c.name) && (!c.memory.containerSite || c.memory.containerSite === site.id));
