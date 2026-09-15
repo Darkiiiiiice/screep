@@ -34,6 +34,6 @@
 - 基线：`artifacts/live/baseline-1789459986985/backup.json`（部署前 M1 代码 21672B + Memory + 房间快照）。
 - 上传：default 分支（当前激活分支，无需 setActiveBranch），bundle 30015B，配额 1/240。
 - 部署后校验：`artifacts/live/baseline-1789460066197/` 线上 main sha256 `67a29595246dfc89` 与本地 `dist/main.js` 一致。
-- 监控：`node scripts/live-monitor.mjs artifacts/live/baseline-1789460066197`（hub 进程 live-monitor）。
+- 监控：`node scripts/live-monitor.mjs artifacts/live/baseline-1789459986985`（hub 进程 live-monitor）。健康比较对 `dist/main.js`（M3），回滚物料取自部署前基线（M1/M2 代码 21672B）——传入部署后基线会让回滚路径还原同一个坏 bundle，已由顾问指出并纠正。
 - 首批样本：tick 82988177→82988209 持续推进，heartbeat 跟随 tick，workers=5，RCL=3，controller progress 3861，errors=0。
 - 回滚：baseline-1789459986985 保存部署前代码；`deploy.mjs` 重传旧 bundle 即可回退（default 分支激活语义不变）。
