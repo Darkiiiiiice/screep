@@ -51,6 +51,8 @@ it('keeps per-room task memory isolated when sibling rooms run on shared memory'
   vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
   vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
   vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_TOWER', 'tower');
+  vi.stubGlobal('STRUCTURE_STORAGE', 'storage');
   vi.stubGlobal('FIND_MY_STRUCTURES', 1);
   vi.stubGlobal('FIND_MY_SPAWNS', 2);
   vi.stubGlobal('FIND_MY_CONSTRUCTION_SITES', 3);

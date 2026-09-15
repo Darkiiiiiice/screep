@@ -86,6 +86,8 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
   vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
   vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
   vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_TOWER', 'tower');
+  vi.stubGlobal('STRUCTURE_STORAGE', 'storage');
   vi.stubGlobal('FIND_STRUCTURES', 1);
   vi.stubGlobal('FIND_MY_STRUCTURES', 2);
   vi.stubGlobal('FIND_MY_SPAWNS', 3);
@@ -96,7 +98,12 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
   vi.stubGlobal('LOOK_TERRAIN', 'terrain');
   vi.stubGlobal('LOOK_STRUCTURES', 'structure');
   vi.stubGlobal('LOOK_CONSTRUCTION_SITES', 'constructionSite');
-  vi.stubGlobal('CONTROLLER_STRUCTURES', { extension: { 1: 0, 2: 5 }, container: { 1: 5, 2: 5 } });
+  vi.stubGlobal('CONTROLLER_STRUCTURES', {
+    extension: { 1: 0, 2: 5, 3: 10, 4: 20 },
+    container: { 1: 5, 2: 5, 3: 5, 4: 5 },
+    tower: { 1: 0, 2: 0, 3: 1, 4: 2 },
+    storage: { 1: 0, 2: 0, 3: 0, 4: 1 },
+  });
   const room = {
     name: 'W0N1',
     controller: { ticksToDowngrade: 20000, level },

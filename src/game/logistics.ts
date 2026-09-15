@@ -170,10 +170,31 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   // plan is survival, and builders above the two-worker floor are scarce.
   const miningSelfSufficient = sources.every(source => containers.some(container => container.pos.isNearTo(source)));
   const rcl = room.controller?.level ?? 0;
+  // Unlocks arrive in build order: extensions first (spawn capacity), then the
+  // tower (defense), then storage (RCL4 buffer). Each type waits for the previous
+  // one to finish — 分批施工，收入与防御先于缓存。
   const extensionCap = CONTROLLER_STRUCTURES[STRUCTURE_EXTENSION]?.[rcl] ?? 0;
   const extensionOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_EXTENSION).length;
   const extensionPlanned = allSites.filter(s => s.structureType === STRUCTURE_EXTENSION).length;
-  if (miningSelfSufficient && extensionCap - extensionOwned - extensionPlanned > 0 && spawns[0]) {
+  const extensionsComplete = extensionOwned + extensionPlanned >= extensionCap && extensionPlanned === 0;
+  const towerCap = CONTROLLER_STRUCTURES[STRUCTURE_TOWER]?.[rcl] ?? 0;
+  const towerOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_TOWER).length;
+  const towerPlanned = allSites.filter(s => s.structureType === STRUCTURE_TOWER).length;
+  const storageCap = CONTROLLER_STRUCTURES[STRUCTURE_STORAGE]?.[rcl] ?? 0;
+  const storageOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_STORAGE).length;
+  const storagePlanned = allSites.filter(s => s.structureType === STRUCTURE_STORAGE).length;
+  const growthType: BuildableStructureConstant | undefined =
+    extensionCap - extensionOwned - extensionPlanned > 0 ? STRUCTURE_EXTENSION
+    : extensionsComplete && towerCap - towerOwned - towerPlanned > 0 ? STRUCTURE_TOWER
+    : extensionsComplete && towerOwned + towerPlanned >= towerCap && storageCap - storageOwned - storagePlanned > 0
+      ? STRUCTURE_STORAGE : undefined;
+  const growthOwned = growthType === STRUCTURE_EXTENSION ? extensionOwned
+    : growthType === STRUCTURE_TOWER ? towerOwned : storageOwned;
+  const growthPlanned = growthType === STRUCTURE_EXTENSION ? extensionPlanned
+    : growthType === STRUCTURE_TOWER ? towerPlanned : storagePlanned;
+  const growthCap = growthType === STRUCTURE_EXTENSION ? extensionCap
+    : growthType === STRUCTURE_TOWER ? towerCap : storageCap;
+  if (miningSelfSufficient && growthType && growthCap - growthOwned - growthPlanned > 0 && spawns[0]) {
     const free = (x: number, y: number) => {
       const position = new RoomPosition(x, y, room.name);
       return position.lookFor(LOOK_TERRAIN)[0] !== 'wall'
@@ -185,7 +206,7 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     // are skipped, then the first surviving tile gets the one site of this tick.
     for (const tile of extensionTiles({ x: spawns[0].pos.x, y: spawns[0].pos.y }, free, 8)) {
       if (!preservesConnectivity(tile, passable)) continue;
-      if (room.createConstructionSite(tile.x, tile.y, STRUCTURE_EXTENSION) === OK) break;
+      if (room.createConstructionSite(tile.x, tile.y, growthType) === OK) break;
     }
   }
   const ranked = rankServices(sinks.map(s => ({ id: s.id, priority: s.structureType === STRUCTURE_SPAWN ? 10 : s.structureType === STRUCTURE_TOWER ? 7 : 5,
@@ -208,6 +229,10 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     const target = containers.find(c => c.id === creep.memory.repairTarget);
     if (!target || target.hits / target.hitsMax >= REPAIR_THRESHOLD) delete creep.memory.repairTarget;
   }
+  // Storage is both a stockpile sink and a supply source for builders/repairers
+  // once it exists (RCL4). Withdrawals read it without pulling from the haul loops.
+  const storage = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureStorage => s.structureType === STRUCTURE_STORAGE && s.store.getUsedCapacity(RESOURCE_ENERGY) > 0)[0];
+  const stockpiles = [...containers, ...(storage ? [storage] : [])];
   const repair = selectRepairTarget(containers.map(container => ({ id: container.id, structureType: container.structureType,
     hits: container.hits, hitsMax: container.hitsMax, critical: true })));
   const urgent = repair !== undefined && repair.urgent;
@@ -261,7 +286,7 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
       }
     }
   }
-  const board = new LogisticsBoard([...containers.map(c => ({ id: c.id, amount: c.store.getUsedCapacity(RESOURCE_ENERGY) })),
+  const board = new LogisticsBoard([...stockpiles.map(c => ({ id: c.id, amount: c.store.getUsedCapacity(RESOURCE_ENERGY) })),
     ...mobile.map(c => ({ id: `cargo:${c.name}`, amount: c.store.energy }))],
     sinks.map(s => ({ id: s.id, amount: s.store.getFreeCapacity(RESOURCE_ENERGY), priority: ranked.length - ranked.findIndex(c => c.id === s.id) })));
   for (const source of sources) {
