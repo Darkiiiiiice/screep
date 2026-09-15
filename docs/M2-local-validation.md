@@ -133,6 +133,15 @@ M2 已完成本地验收（69 项场景检查全绿）；实验开关仍为 `Mem
   4. 建筑优先级改由**已放置工地**推导而非放置链：storage 工地在位时其余类型共享 3 人池、塔工地在位时其余共享 2 人池；塔/storage 工地可抢占 extension 建筑工，并豁免于"至少留一名搬运工"下限。
 - 验证：progression-probe 11 项检查通过（原始 3000/4300 注入与 2799/4299/末尾检查点，注入 schedule 未动）；最终 tick 5501 storage 工地进度 504。14 个场景脚本 + 69 项单测 + typecheck/lint/build/smoke 全绿。报告：`artifacts/scenarios/fresh-1789445239994-13572/report.json`。
 
+## 顾问审查后续修复（同一切片，原始注入节奏不变）
+
+- tower 容量存根与引擎对齐：`test/unit/planning.test.ts` 为 `{3:1, 4:1, 5:2}`（@screeps/common constants.js:222），RCL4 仅一塔位——`4:2` 的存根会放置第二塔并掩盖 storage 死锁。
+- storage 加入交付目标：此前 `sinks` 仅 spawn/extension/tower，storage 只作 withdraw 源，缓冲区永远充能为零。现 spawn+extension 全满时 storage 成为溢出 sink（`spawnBufferFull` 门控），不与运行中经济竞争。
+- extension 放置限流：恢复分支改为 `extensionPlanned === 0` 才放新工地——一次性排 14 个工地会让 2-3 名建筑工永远轮不到塔/storage。
+- miner 认领对称清理：认领 miner 时删除 `containerSite`/`containerBuilder`（此前仅删 `shipment`），消除"同时挂矿工与工地标记"的幽灵建筑工，一人一工地守卫不再被旧标记永久阻塞。
+- 建筑工池只限流 extension：塔/储能工地永不受池上限约束（否则访问顺序中塔+1 个 extension 即占满池，storage 被 `continue` 跳过）。
+- 验证：progression-probe 11 项检查通过（3000/4300 注入与 2799/4299 检查点保持原始）；末 tick 5501 storage 工地进度 2135/30000，extension 建成 7、在途仅 1。14 场景 + 69 单测 + typecheck/lint/build/smoke 全绿。报告：`artifacts/scenarios/fresh-1789445896916-28785/report.json`。提交 242f251。
+
 ```sh
 npm run test:traffic-recovery
 npm run test:logistics
