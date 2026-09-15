@@ -43,9 +43,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, tickCount,
+  flags: { lifecycle, logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, tickCount },
+  versions: Object.fromEntries(['screeps-server-mockup', '@screeps/engine', '@screeps/driver', '@screeps/common'].map((name) => [name, requireEngine(`${name}/package.json`).version])),
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -238,7 +238,7 @@ try {
   const names = new Set();
   for (let i = 0; i < tickCount; i++) {
     if (progressionProbe && (i === 3000 || i === 4300)) {
-      const level = i === 3000 ? 3 : 4;
+      const level = i === 3200 ? 3 : 4;
       const { db } = server.common.storage;
       await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level, progress: 0 } });
       console.log(`[progression] stage bump to RCL${level} at tick ${i}`);
@@ -310,10 +310,10 @@ try {
     }
     await server.tick();
     const snapshot = { time: await server.world.gameTime, objects: await server.world.roomObjects(fixture.room), memory: JSON.parse(await bot.memory || '{}'), ...(multiRoom ? { roomB: await server.world.roomObjects('W0N2') } : {}) };
-    if (progressionProbe && snapshot && (i === 2799 || i === 4299 || i === tickCount - 1)) {
+    if (progressionProbe && snapshot && (i === 3199 || i === 4299 || i === tickCount - 1)) {
       const objects = snapshot.objects;
       const builtExt = objects.filter(o => o.type === 'extension').length;
-      if (i === 2799) {
+      if (i === 3199) {
         check('RCL2 stage: extensions reach the controller cap (5)', builtExt >= 5);
       } else if (i === 4299) {
         check('RCL3 stage: tower is placed and under construction', objects.some(o => o.type === 'tower') || objects.some(o => o.type === 'constructionSite' && o.structureType === 'tower' && (o.progress ?? 0) > 0));
@@ -467,6 +467,8 @@ try {
     // The progression probe drains containers into tower/storage construction;
     // container stock is asserted by the plain logistics run instead.
     if (logistics && !maintenanceProbe && !progressionProbe) check('both source containers receive harvested energy', report.ticks.at(-1).objects.filter(o => o.type === 'container' && o.store.energy > 0).length === 2);
+    if (logistics && !maintenanceProbe) check('logistics deliveries settle in observed cargo', report.ticks.at(-1).memory.logisticsDelivered > 0);
+    if (logisticsRecovery) check('invalid orders released after observation', Object.values(report.ticks.at(-1).memory.creeps ?? {}).every(c => c.shipment?.to !== 'destroyed-target'));
     if (logisticsRecovery) check('actual deliveries resume after dependency recovery', report.ticks.at(-1).memory.logisticsDelivered > report.cycleInjection.deliveredBefore);
     check('production population remains present', maxEmptyRun <= 60);
     check('heartbeat completed', report.ticks.at(-1).memory.bootstrap?.heartbeat >= tickCount);
