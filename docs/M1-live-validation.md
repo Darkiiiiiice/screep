@@ -53,4 +53,4 @@
 - 缺陷:`state.workers` 表有 GC,但引擎 `Memory.creeps` 无人清扫;死 creep 的认领标记(minerSource/containerBuilder/repairTarget)长期残留,部署后实测 257 条 vs 6 活。
 - 修复:`runBootstrap` 每 25 tick 顺带清扫 `Memory.creeps`(孵化中 creep 安全:`Game.creeps` 自 spawnCreep 起可见)。
 - 线上证据:部署后 130 秒 `Memory.creeps` 257 → 6,幽灵归零;bundle sha `ec1f2981c9a6`;rollback 物料 `baseline-1789470816939`。
-- 已知 flake 备案:`test:progression` 的 'RCL2 stage: extensions reach the controller cap (5)' 在干净代码上同点偶红(3 次红跨 3 种代码状态),重跑即绿,非本次改动引入。
+- ~~已知 flake 备案~~ 已根治:extension 实测 ~tick 2802 建成,而检查点设在 2799,3-tick 临界竞争导致跨代码状态偶红;检查点后移至 2899(阶段注入 3000 前留 100 tick 真实余量),连跑 3 次全绿。

@@ -317,10 +317,13 @@ try {
     }
     await server.tick();
     const snapshot = { time: await server.world.gameTime, objects: await server.world.roomObjects(fixture.room), memory: JSON.parse(await bot.memory || '{}'), ...(multiRoom ? { roomB: await server.world.roomObjects('W0N2') } : {}) };
-    if (progressionProbe && snapshot && (i === 2799 || i === 4299 || i === tickCount - 1)) {
+    // RCL2 checkpoint sits 100 ticks before the stage bump: observed completion
+    // lands ~tick 2802, so the old 2799 checkpoint was a 3-tick razor race that
+    // flaked red on healthy runs (ledger 2026-09-15).
+    if (progressionProbe && snapshot && (i === 2899 || i === 4299 || i === tickCount - 1)) {
       const objects = snapshot.objects;
       const builtExt = objects.filter(o => o.type === 'extension').length;
-      if (i === 2799) {
+      if (i === 2899) {
         check('RCL2 stage: extensions reach the controller cap (5)', builtExt >= 5);
       } else if (i === 4299) {
         check('RCL3 stage: tower is placed and under construction', objects.some(o => o.type === 'tower') || objects.some(o => o.type === 'constructionSite' && o.structureType === 'tower' && (o.progress ?? 0) > 0));
