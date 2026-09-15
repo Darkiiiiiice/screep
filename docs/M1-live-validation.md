@@ -37,3 +37,12 @@
 - 监控：`node scripts/live-monitor.mjs artifacts/live/baseline-1789459986985`（hub 进程 live-monitor）。健康比较对 `dist/main.js`（M3），回滚物料取自部署前基线（M1/M2 代码 21672B）——传入部署后基线会让回滚路径还原同一个坏 bundle，已由顾问指出并纠正。
 - 首批样本：tick 82988177→82988209 持续推进，heartbeat 跟随 tick，workers=5，RCL=3，controller progress 3861，errors=0。
 - 回滚：baseline-1789459986985 保存部署前代码；`deploy.mjs` 重传旧 bundle 即可回退（default 分支激活语义不变）。
+
+
+## M3 维修抢占缺陷修复（2026-09-15,aa6c983）
+
+- 缺陷：两个空置遗留容器 (4,7)/(5,7) 衰坏至 21.4% 触发 urgent 维修抢占（`URGENT_REPAIR_THRESHOLD=0.25`）,`logistics.ts` 的 `urgent` 门冻结全部 11 个工地；部署前旧工地即已停滞（M2 时代另一道余量门）。
+- 修复：`selectRepairTarget` 的 urgent 改为 `ratio<0.25 && critical`;`critical` 由调用方按收益判定（矿工转运目标=源邻接，或有存量）。空置遗留容器只排队闲时维修，永不抢占建设。
+- 回归门：维修探针改伤收益容器 + 预置 20% 空置遗留容器；旧 src 跑新夹具 FAIL、新 src 11/11 PASS;15 场景变体 136 检查 + 71 单测全绿。
+- 部署：bundle sha256 `d74a66a38f8c`，配额 2/240;rollback 物料 `baseline-1789463116874`（修复前 M3 代码）。
+- 线上证据（修复后 103 tick,baseline-1789463151595 → baseline-1789463550064):extension 工地 (23,19) +213 进度（冻结解除）;收益容器 (6,6) hits +4900 获修；空置 (4,7) 仅衰减未修（死重正确忽略）;controller 3961→4001;errors=0。
