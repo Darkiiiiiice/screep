@@ -193,13 +193,14 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   // (RCL4 buffer). Placement keys on OWNED progress; a tower that exists as a
   // site unlocks storage, and once the tower is owned or placed the extension
   // branch resumes toward the 10/20 caps so spawn capacity keeps growing.
-  // The resume branch is bounded to one pending extension site: with ~14
-  // sites queued the one-off stage sites starve for builders.
+  // The resume branch is bounded to a small pending queue (≤3 sites): a full
+  // ~14-site flood starves the one-off stage sites of builders, while strict
+  // serialization (0 pending) needlessly slows post-stage growth.
   const growthType: BuildableStructureConstant | undefined =
     extensionCap - extensionOwned - extensionPlanned > 0 && extensionOwned < 5 ? STRUCTURE_EXTENSION
     : towerCap - towerOwned - towerPlanned > 0 ? STRUCTURE_TOWER
     : (towerOwned + towerPlanned > 0) && storageCap - storageOwned - storagePlanned > 0 ? STRUCTURE_STORAGE
-    : (towerOwned + towerPlanned > 0) && extensionCap - extensionOwned - extensionPlanned > 0 && extensionPlanned === 0 ? STRUCTURE_EXTENSION
+    : (towerOwned + towerPlanned > 0) && extensionCap - extensionOwned - extensionPlanned > 0 && extensionPlanned < 3 ? STRUCTURE_EXTENSION
       : undefined;
   const growthOwned = growthType === STRUCTURE_EXTENSION ? extensionOwned
     : growthType === STRUCTURE_TOWER ? towerOwned : storageOwned;
@@ -234,8 +235,10 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     delete creep.memory.containerSite;
   }
   const containerSites = allSites.filter(s => s.structureType === STRUCTURE_CONTAINER);
-  // Build order follows placement order: current-stage sites first so a new
-  // unlock (tower, storage) is not starved by older sites still finishing.
+  // The sort only bubbles next-to-place (`growthType`) sites while no stage
+  // site is pending; it is a stable no-op once tower/storage sites exist
+  // (growthType flips to extension/undefined). Starvation protection lives in
+  // the placed-site stagePool + preempt + floor exemption below, not here.
   const extensionSites = allSites.filter(s => s.structureType !== STRUCTURE_CONTAINER)
     .sort((a, b) => (b.structureType === growthType ? 1 : 0) - (a.structureType === growthType ? 1 : 0));
   // Repair flags are cleaned unconditionally: a destroyed or healed target must

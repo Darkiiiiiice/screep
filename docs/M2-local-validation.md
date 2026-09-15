@@ -142,6 +142,12 @@ M2 已完成本地验收（69 项场景检查全绿）；实验开关仍为 `Mem
 - 建筑工池只限流 extension：塔/储能工地永不受池上限约束（否则访问顺序中塔+1 个 extension 即占满池，storage 被 `continue` 跳过）。
 - 验证：progression-probe 11 项检查通过（3000/4300 注入与 2799/4299 检查点保持原始）；末 tick 5501 storage 工地进度 2135/30000，extension 建成 7、在途仅 1。14 场景 + 69 单测 + typecheck/lint/build/smoke 全绿。报告：`artifacts/scenarios/fresh-1789445896916-28785/report.json`。提交 242f251。
 
+## 顾问复审微调（同一切片）
+
+- 恢复分支限流从 `extensionPlanned === 0` 放宽到 `< 3`：严格串行把 post-stage 10/20 上限扩展压成一工地一建筑工的节奏；≤3 在途保持推进速度，饥饿防护由 placed-site 池/preempt/豁免承担（顾问首条 concern 已自行更正：`<5` 主分支不受影响，RCL2 检查点本就安全）。
+- 陈旧注释改写：`extensionSites` 排序键是 `growthType`——塔/storage 工地在途时其为 extension/undefined，排序退化为稳定 no-op；注释明确饥饿防护不依赖该排序，避免后来者再次误用。
+- 验证：progression-probe 11 项检查通过；末 tick 5501 storage 工地 2277/30000，extension 建成 6、在途 3。报告：`artifacts/scenarios/fresh-1789446385805-39905/report.json`。
+
 ```sh
 npm run test:traffic-recovery
 npm run test:logistics
