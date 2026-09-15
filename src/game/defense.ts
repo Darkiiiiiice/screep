@@ -10,6 +10,8 @@ declare global {
 const TOWER_ATTACK_COST = 10;
 const TOWER_HEAL_COST = 10;
 const TOWER_REPAIR_COST = 10;
+/** Heal/repair hold this reserve back; attacks may always spend it all. */
+const TOWER_DEFENSE_RESERVE = 100;
 
 /**
  * Tower defense: focus-fire the highest-threat hostile, heal the most damaged
@@ -17,14 +19,15 @@ const TOWER_REPAIR_COST = 10;
  * committed only while targets exist — no idle firing. Survival-first: this runs
  * before logistics each tick and never consults creep labor.
  */
-export function runDefense(room: Room): void {
+export function runDefense(room: Room, allies: readonly string[] = []): void {
   const towerEnergy = (tower: StructureTower) => tower.store.getUsedCapacity(RESOURCE_ENERGY);
   const towers = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureTower =>
     s.structureType === STRUCTURE_TOWER);
   if (!towers.length) return;
   const stats = (Memory.defenseStats ??= {});
 
-  const hostileCreeps = room.find(FIND_HOSTILE_CREEPS);
+  const hostileCreeps = room.find(FIND_HOSTILE_CREEPS)
+    .filter(c => !allies.includes(c.owner?.username ?? ''));
   const hostileInputs: HostileInput[] = hostileCreeps.map(c => ({
     id: c.id,
     hits: c.hits,
@@ -35,14 +38,11 @@ export function runDefense(room: Room): void {
     ),
   }));
   const targets = towerTargets(towers.map(t => ({ id: t.id, energy: towerEnergy(t) })), hostileInputs);
-  if (Game.time % 50 === 0) console.log(`[def] t=${Game.time} rcl=${room.controller?.level} towers=${towers.length} hostiles=${hostileCreeps.length} parts=${hostileInputs.map(h => h.damageParts).join('/')} towerE=${towers.map(t => t.store.getUsedCapacity(RESOURCE_ENERGY)).join(',')} targets=${targets.length}`);
   if (targets.length) {
     const focus = hostileCreeps.find(c => c.id === targets[0]);
     for (const tower of towers) {
       if (towerEnergy(tower) < TOWER_ATTACK_COST || !focus) continue;
-      const ret = tower.attack(focus);
-      if (Game.time % 50 === 0) console.log(`[def2] ret=${ret}`);
-      if (ret === OK) {
+      if (tower.attack(focus) === OK) {
         stats[tower.id] = { attacks: (stats[tower.id]?.attacks ?? 0) + 1, heals: stats[tower.id]?.heals ?? 0, lastHostile: Game.time };
       }
     }
@@ -54,7 +54,7 @@ export function runDefense(room: Room): void {
     .filter(c => c.hits < c.hitsMax)
     .sort((a, b) => (a.hits / a.hitsMax) - (b.hits / b.hitsMax));
   for (const tower of towers) {
-    if (towerEnergy(tower) < TOWER_HEAL_COST) continue;
+    if (towerEnergy(tower) - TOWER_DEFENSE_RESERVE < TOWER_HEAL_COST) continue;
     const patient = damagedOwn[0];
     if (patient) {
       if (tower.heal(patient) === OK) {
@@ -75,7 +75,7 @@ export function runDefense(room: Room): void {
   if (!repair) return;
   const structure = repairable.find(s => s.id === repair.id);
   for (const tower of towers) {
-    if (towerEnergy(tower) < TOWER_REPAIR_COST || !structure) continue;
+    if (towerEnergy(tower) - TOWER_DEFENSE_RESERVE < TOWER_REPAIR_COST || !structure) continue;
     tower.repair(structure);
   }
 }

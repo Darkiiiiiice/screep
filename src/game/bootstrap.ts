@@ -141,7 +141,7 @@ export function runBootstrap(): void {
     if (Game.cpu.getUsed() >= executionLimit) { state.degraded = true; break; }
     const room = rooms[(i + state.cursor) % rooms.length]!;
     isolate(state, room.name, () => {
-      isolate(state, 'defense', () => runDefense(room));
+      isolate(state, 'defense', () => runDefense(room, policy.policy.allies));
       const sources = room.find(FIND_SOURCES);
       const creeps = room.find(FIND_MY_CREEPS).filter(c => c.getActiveBodyparts(WORK) > 0 && c.getActiveBodyparts(CARRY) > 0 && c.getActiveBodyparts(MOVE) > 0);
       const spawns = room.find(FIND_MY_SPAWNS);

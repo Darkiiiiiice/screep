@@ -100,4 +100,30 @@ describe('tower defense intents', () => {
     runDefense(room as unknown as Room);
     expect(t1.repair).toHaveBeenCalledExactlyOnceWith(spawn);
   });
+
+  it('spares allied creeps from tower fire even when armed', () => {
+    const t1 = towerStub('t1', 500);
+    const ally = { id: 'ally', hits: 1000, hitsMax: 1000, pos: { x: 30, y: 30 },
+      owner: { username: 'friend' }, body: [{ type: 'attack' }, { type: 'attack' }] };
+    const room = roomStub({ towers: [t1], hostiles: [ally], spawns: [{ pos: { x: 25, y: 25 } }] });
+    runDefense(room as unknown as Room, ['friend']);
+    expect(t1.attack).not.toHaveBeenCalled();
+    expect(t1.heal).not.toHaveBeenCalled();
+  });
+
+  it('holds a fire reserve: heal and repair wait, attack does not', () => {
+    const dry = towerStub('t1', 105);
+    const hurt = { id: 'hurt', hits: 100, hitsMax: 300 };
+    const damagedSpawn = { id: 'spawn-id', structureType: 'spawn', hits: 1000, hitsMax: 5000 };
+    const room = roomStub({ towers: [dry], own: [hurt], structures: [damagedSpawn], spawns: [{ pos: { x: 25, y: 25 } }] });
+    runDefense(room as unknown as Room);
+    expect(dry.heal).not.toHaveBeenCalled();
+    expect(dry.repair).not.toHaveBeenCalled();
+    const raider = { id: 'raider', hits: 1000, hitsMax: 1000, pos: { x: 30, y: 30 },
+      body: [{ type: 'attack' }] };
+    const threatened = roomStub({ towers: [dry], hostiles: [raider], spawns: [{ pos: { x: 25, y: 25 } }] });
+    runDefense(threatened as unknown as Room);
+    expect(dry.attack).toHaveBeenCalledExactlyOnceWith(raider);
+  });
 });
+

@@ -51,8 +51,11 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     names.push(creep.name);
     inbound.set(to, names);
   }
-  const sinks = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension =>
-    (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION) && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
+  // Towers join the sink list so haulers refuel them; they rank between spawn
+  // and extensions because a dry tower is a dead defense (PLAN §3.7).
+  const sinks = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension | StructureTower =>
+    (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION || s.structureType === STRUCTURE_TOWER)
+    && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
   const spawns = room.find(FIND_MY_SPAWNS);
   const priorService = Memory.controllerService?.[room.name];
   const upgrade = priorService?.worker && Game.time - priorService.lastProgress >= 200 ? { room: room.name, worker: priorService.worker } : undefined;
@@ -185,7 +188,7 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
       if (room.createConstructionSite(tile.x, tile.y, STRUCTURE_EXTENSION) === OK) break;
     }
   }
-  const ranked = rankServices(sinks.map(s => ({ id: s.id, priority: s.structureType === STRUCTURE_SPAWN ? 10 : 5,
+  const ranked = rankServices(sinks.map(s => ({ id: s.id, priority: s.structureType === STRUCTURE_SPAWN ? 10 : s.structureType === STRUCTURE_TOWER ? 7 : 5,
     emergency: mobile.length < 2 && s.structureType === STRUCTURE_SPAWN })), services, Game.time);
   const rclLevel = room.controller?.level ?? 0;
   const ownedByType = new Map<string, number>();
