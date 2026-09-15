@@ -183,14 +183,16 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   const storageOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_STORAGE).length;
   const storagePlanned = allSites.filter(s => s.structureType === STRUCTURE_STORAGE).length;
   // Stage order: extensions to the base economy (5) → tower (defense) → storage
-  // (RCL4 buffer). Placement waits for the previous stage's OWNED count so a
-  // planned tower does not block storage placement; builders below work every
-  // unfinished site in parallel (one sticky builder per site) so the tower and
+  // (RCL4 buffer). Placement keys on OWNED progress; a tower that exists as a
+  // site unlocks storage, and once the tower is owned or placed the extension
+  // branch resumes toward the 10/20 caps so spawn capacity keeps growing.
+  // Unfinished sites of earlier stages build in parallel via sticky builders.
   const growthType: BuildableStructureConstant | undefined =
     extensionCap - extensionOwned - extensionPlanned > 0 && extensionOwned < 5 ? STRUCTURE_EXTENSION
     : towerCap - towerOwned - towerPlanned > 0 ? STRUCTURE_TOWER
-    : towerPlanned > 0 && storageCap - storageOwned - storagePlanned > 0 ? STRUCTURE_STORAGE
-    : undefined;
+    : (towerOwned + towerPlanned > 0) && storageCap - storageOwned - storagePlanned > 0 ? STRUCTURE_STORAGE
+    : (towerOwned + towerPlanned > 0) && extensionCap - extensionOwned - extensionPlanned > 0 ? STRUCTURE_EXTENSION
+      : undefined;
   const growthOwned = growthType === STRUCTURE_EXTENSION ? extensionOwned
     : growthType === STRUCTURE_TOWER ? towerOwned : storageOwned;
   const growthPlanned = growthType === STRUCTURE_EXTENSION ? extensionPlanned
@@ -224,7 +226,10 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     delete creep.memory.containerSite;
   }
   const containerSites = allSites.filter(s => s.structureType === STRUCTURE_CONTAINER);
-  const extensionSites = allSites.filter(s => s.structureType !== STRUCTURE_CONTAINER);
+  // Build order follows placement order: current-stage sites first so a new
+  // unlock (tower, storage) is not starved by older sites still finishing.
+  const extensionSites = allSites.filter(s => s.structureType !== STRUCTURE_CONTAINER)
+    .sort((a, b) => (b.structureType === growthType ? 1 : 0) - (a.structureType === growthType ? 1 : 0));
   // Repair flags are cleaned unconditionally: a destroyed or healed target must
   // not permanently exclude its former worker from future assignments.
   for (const creep of mobile) {
@@ -252,7 +257,7 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
       delete worker.memory.containerBuilder;
       handled.add(worker.name);
       if (!worker.store.energy) {
-        const container = worker.pos.findClosestByRange(containers.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
+        const container = worker.pos.findClosestByRange(stockpiles.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
         if (container) {
           if (worker.withdraw(container, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) travel(worker, container.pos, 1);
         } else {
@@ -296,7 +301,10 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     if (mobile.length - handled.size <= 2) break;
     const container = containers.find(c => c.pos.isNearTo(source));
     if (!container) continue;
-    const candidates = eligible.filter(c => !handled.has(c.name));
+    // Builders keep their site claim: the miner loop must not poach a worker
+    // already flagged for a construction site (it re-adds minerSource and the
+    // builder loop below can never reclaim it).
+    const candidates = eligible.filter(c => !handled.has(c.name) && !c.memory.containerSite);
     const miner = candidates.find(c => c.memory.minerSource === source.id) ?? candidates.sort((a, b) => a.pos.getRangeTo(container) - b.pos.getRangeTo(container))[0];
     if (!miner) continue;
     handled.add(miner.name);
@@ -314,8 +322,18 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     const cap = CONTROLLER_STRUCTURES[site.structureType]?.[rclLevel] ?? 0;
     const planned = (plannedByType.get(site.structureType) ?? 0) - 1;
     // The cap gates building as well as placement: phantom sites beyond the
-    // controller's allowance are left unbuilt (they time out on their own).
-    if (cap - (ownedByType.get(site.structureType) ?? 0) - planned <= 0) continue;
+    // controller's allowance are left unbuilt — release their builders so they
+    // can take real work instead of camping a site that will never complete.
+    if (cap - (ownedByType.get(site.structureType) ?? 0) - planned <= 0) {
+      for (const creep of mobile) if (creep.memory.containerSite === site.id) {
+        delete creep.memory.containerSite;
+        delete creep.memory.containerBuilder;
+      }
+      continue;
+    }
+    // One builder per site per tick: a second sticky flag on the same site is
+    // a stale duplicate and is cleared, not honored.
+    if (mobile.some(c => handled.has(c.name) && c.memory.containerSite === site.id)) continue;
     // Exactly one builder per site: reclaim the sticky worker when present, and
     // clear duplicate flags earlier assignments left on the same site.
     for (const creep of mobile) if (creep.memory.containerSite === site.id && !eligible.includes(creep)) {
@@ -323,11 +341,32 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
       delete creep.memory.containerBuilder;
     }
     // Leave at least one worker unclaimed for hauling: extensions must not starve
-    // spawn deliveries (symmetric with the miner floor).
-    if (mobile.length - handled.size <= 1) break;
+    // spawn deliveries (symmetric with the miner floor). A placed stage-unlock
+    // site (tower while unbuilt, storage while unbuilt) is exempt: it always
+    // gets one builder.
+    if (mobile.length - handled.size <= 1
+      && site.structureType !== (storagePlanned > 0 && storageOwned === 0 ? STRUCTURE_STORAGE : towerPlanned > 0 && towerOwned === 0 ? STRUCTURE_TOWER : growthType)) break;
+    // Builder priority is derived from PLACED sites, not from the placement
+    // chain: `growthType` flips back to extensions while the tower is still a
+    // site, which would starve the tower — and later the storage — of any
+    // builder. With a storage site placed: storage ∞, others pooled at 3.
+    // With a tower site placed: tower ∞, others pooled at 2.
+    const stagePool = storagePlanned > 0 && storageOwned === 0
+      ? (site.structureType === STRUCTURE_STORAGE ? Infinity : 3)
+      : towerPlanned > 0 && towerOwned === 0
+        ? (site.structureType === STRUCTURE_TOWER ? Infinity : 2)
+        : Infinity;
+    if (mobile.filter(c => handled.has(c.name) && c.memory.containerSite && c.memory.containerSite !== site.id
+      && extensionSites.some(s => s.id === c.memory.containerSite)).length >= stagePool) continue;
     const surplus = eligible.filter(c => !handled.has(c.name) && (!c.memory.containerSite || c.memory.containerSite === site.id));
+    // Tower and storage sites preempt an older-stage builder when no free
+    // worker exists — a stage unlock must always have one builder. Preemption
+    // also reaches workers already claimed for an older site this tick.
+    const preempt = () => mobile.find(c => c.memory.containerSite
+      && extensionSites.some(s => s.id === c.memory.containerSite && s.structureType === STRUCTURE_EXTENSION));
     const builder = surplus.find(c => c.memory.containerSite === site.id)
-      ?? surplus.sort((a, b) => b.getActiveBodyparts(WORK) - a.getActiveBodyparts(WORK) || a.pos.getRangeTo(site) - b.pos.getRangeTo(site))[0];
+      ?? surplus.sort((a, b) => b.getActiveBodyparts(WORK) - a.getActiveBodyparts(WORK) || a.pos.getRangeTo(site) - b.pos.getRangeTo(site))[0]
+      ?? (site.structureType === STRUCTURE_TOWER || site.structureType === STRUCTURE_STORAGE ? preempt() : undefined);
     if (!builder) continue;
     for (const other of mobile) if (other !== builder && other.memory.containerSite === site.id) {
       delete other.memory.containerSite;
@@ -373,13 +412,15 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   }
   for (const creep of eligible) {
     if (handled.has(creep.name) || creep.store.energy > 0) continue;
-    const sorted = [...containers].sort((a, b) => creep.pos.getRangeTo(a) - creep.pos.getRangeTo(b));
+    const sorted = [...stockpiles].sort((a, b) => creep.pos.getRangeTo(a) - creep.pos.getRangeTo(b));
     const prior = creep.memory.shipment;
     const shipment = (prior ? board.reserve(creep.name, creep.store.getFreeCapacity(RESOURCE_ENERGY), [prior.from], prior.to) : undefined)
       ?? board.reserve(creep.name, creep.store.getFreeCapacity(RESOURCE_ENERGY), sorted.map(c => c.id));
     if (!shipment) { delete creep.memory.shipment; continue; }
     creep.memory.shipment = { from: shipment.from, to: shipment.to, expires: prior?.expires ?? Game.time + 150 };
-    const source = containers.find(c => c.id === shipment.from)!;
+    // The board may reserve against storage as well as containers; resolve
+    // `from` against the full stockpile list or the dereference is undefined.
+    const source = stockpiles.find(c => c.id === shipment.from)!;
     if (creep.withdraw(source, RESOURCE_ENERGY, shipment.amount) === ERR_NOT_IN_RANGE) travel(creep, source.pos, 1);
     handled.add(creep.name);
   }
