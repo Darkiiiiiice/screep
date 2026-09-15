@@ -27,3 +27,13 @@
 连续三次心跳过期、没有工作单位或出现新的运行错误时，监控确认当前代码和激活分支仍与本次部署匹配，再恢复旧代码。通信失败与代码故障分开处理，连续五次通信失败会停止并记录 monitor-unavailable。
 
 此监控是一次性验收工具，依赖本机进程持续运行；未接入系统服务。经济停滞通过控制器进度和实时复核判断，不会仅因单次进度停滞回滚。
+
+
+## M3 部署（2026-09-15）
+
+- 基线：`artifacts/live/baseline-1789459986985/backup.json`（部署前 M1 代码 21672B + Memory + 房间快照）。
+- 上传：default 分支（当前激活分支，无需 setActiveBranch），bundle 30015B，配额 1/240。
+- 部署后校验：`artifacts/live/baseline-1789460066197/` 线上 main sha256 `67a29595246dfc89` 与本地 `dist/main.js` 一致。
+- 监控：`node scripts/live-monitor.mjs artifacts/live/baseline-1789460066197`（hub 进程 live-monitor）。
+- 首批样本：tick 82988177→82988209 持续推进，heartbeat 跟随 tick，workers=5，RCL=3，controller progress 3861，errors=0。
+- 回滚：baseline-1789459986985 保存部署前代码；`deploy.mjs` 重传旧 bundle 即可回退（default 分支激活语义不变）。
