@@ -46,3 +46,11 @@
 - 回归门：维修探针改伤收益容器 + 预置 20% 空置遗留容器；旧 src 跑新夹具 FAIL、新 src 11/11 PASS;15 场景变体 136 检查 + 71 单测全绿。
 - 部署：bundle sha256 `d74a66a38f8c`，配额 2/240;rollback 物料 `baseline-1789463116874`（修复前 M3 代码）。
 - 线上证据（修复后 103 tick,baseline-1789463151595 → baseline-1789463550064):extension 工地 (23,19) +213 进度（冻结解除）;收益容器 (6,6) hits +4900 获修；空置 (4,7) 仅衰减未修（死重正确忽略）;controller 3961→4001;errors=0。
+
+
+## Memory.creeps 幽灵清扫(2026-09-15,e8ec936)
+
+- 缺陷:`state.workers` 表有 GC,但引擎 `Memory.creeps` 无人清扫;死 creep 的认领标记(minerSource/containerBuilder/repairTarget)长期残留,部署后实测 257 条 vs 6 活。
+- 修复:`runBootstrap` 每 25 tick 顺带清扫 `Memory.creeps`(孵化中 creep 安全:`Game.creeps` 自 spawnCreep 起可见)。
+- 线上证据:部署后 130 秒 `Memory.creeps` 257 → 6,幽灵归零;bundle sha `ec1f2981c9a6`;rollback 物料 `baseline-1789470816939`。
+- 已知 flake 备案:`test:progression` 的 'RCL2 stage: extensions reach the controller cap (5)' 在干净代码上同点偶红(3 次红跨 3 种代码状态),重跑即绿,非本次改动引入。
