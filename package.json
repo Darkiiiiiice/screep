@@ -36,7 +36,8 @@
     "test:maintenance": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --maintenance-probe",
     "test:defense": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --defense-probe",
     "select-room": "node scripts/select-room.mjs",
-    "verify": "npm run typecheck && npm run lint && npm test && npm run build && npm run smoke && npm run scenario -- fresh && npm run scenario -- legacy && npm run scenario -- no-memory"
+    "verify": "npm run typecheck && npm run lint && npm test && npm run build && npm run smoke && npm run scenario -- fresh && npm run scenario -- legacy && npm run scenario -- no-memory",
+    "test:progression": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --progression-probe"
   },
   "dependencies": {
     "screeps-api": "^2.1.0"

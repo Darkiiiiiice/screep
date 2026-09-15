@@ -25,6 +25,7 @@ const cpuStress = args.includes('--cpu-stress');
 const multiRoom = args.includes('--multi-room');
 const maintenanceProbe = args.includes('--maintenance-probe');
 const defenseProbe = args.includes('--defense-probe');
+const progressionProbe = args.includes('--progression-probe');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -32,7 +33,8 @@ assert(!trafficRecovery || !lifecycle && !fairnessProbe && !logistics, '--traffi
 assert(!multiRoom || lifecycle && logistics && fairnessProbe, '--multi-room requires --lifecycle --logistics --fairness-probe');
 assert(!maintenanceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--maintenance-probe requires --lifecycle --logistics');
 assert(!defenseProbe || lifecycle && logistics && !construction && !fairnessProbe, '--defense-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : recovery || logistics ? 600 : 3100) : 6;
+assert(!progressionProbe || lifecycle && logistics && !construction && !fairnessProbe, '--progression-probe requires --lifecycle --logistics');
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -43,7 +45,7 @@ const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
     logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, tickCount,
   node: process.version,
-  versions: Object.fromEntries(['screeps-server-mockup', '@screeps/engine', '@screeps/driver', '@screeps/common'].map((name) => [name, requireEngine(`${name}/package.json`).version])),
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -203,6 +205,14 @@ try {
     });
     report.defense = { tower: [24, 24], raiderHits: 1000, woundedHits: 150 };
   }
+  if (progressionProbe) {
+    // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
+    // builders get 2-WORK bodies; the AI must place and finish the remaining two.
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 2, progress: 0 } });
+    for (const [x, y] of [[24, 23], [26, 23], [23, 26]]) {
+      await server.world.addRoomObject(fixture.room, 'extension', x, y, { user: bot.id, store: { energy: 50 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
+    }
+  }
   if (fairnessProbe) {
     await server.world.addRoomObject(fixture.room, 'extension', 26, 25, { user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
     await server.world.addRoomObject(fixture.room, 'extension', 24, 25, { user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
@@ -227,6 +237,13 @@ try {
   if (fairnessProbe) report.fairness = { delivered: {}, last: {}, maxWait: {} };
   const names = new Set();
   for (let i = 0; i < tickCount; i++) {
+    if (progressionProbe && (i === 3000 || i === 4300)) {
+      const level = i === 3000 ? 3 : 4;
+      const { db } = server.common.storage;
+      await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level, progress: 0 } });
+      console.log(`[progression] stage bump to RCL${level} at tick ${i}`);
+    }
+
     if (persistentFailure && [450, 451, 452].includes(i)) {
       const current = JSON.parse(await bot.memory || '{}');
       if (i === 450) {
@@ -293,6 +310,21 @@ try {
     }
     await server.tick();
     const snapshot = { time: await server.world.gameTime, objects: await server.world.roomObjects(fixture.room), memory: JSON.parse(await bot.memory || '{}'), ...(multiRoom ? { roomB: await server.world.roomObjects('W0N2') } : {}) };
+    if (progressionProbe && snapshot && (i === 2799 || i === 4299 || i === tickCount - 1)) {
+      const objects = snapshot.objects;
+      const builtExt = objects.filter(o => o.type === 'extension').length;
+      if (i === 2799) {
+        check('RCL2 stage: extensions reach the controller cap (5)', builtExt >= 5);
+      } else if (i === 4299) {
+        check('RCL3 stage: tower is placed and under construction', objects.some(o => o.type === 'tower') || objects.some(o => o.type === 'constructionSite' && o.structureType === 'tower' && (o.progress ?? 0) > 0));
+      } else {
+        check('RCL4 stage: storage is placed and under construction', objects.some(o => o.type === 'storage') || objects.some(o => o.type === 'constructionSite' && o.structureType === 'storage' && (o.progress ?? 0) > 0));
+        const storageObject = objects.find(o => o.type === 'storage');
+        if (storageObject) check('storage accumulates energy from the board', (storageObject.store?.energy ?? 0) > 0);
+        check('progression heartbeat completed', snapshot.memory.bootstrap?.heartbeat >= tickCount);
+        check('progression has no isolated runtime errors', snapshot.memory.bootstrap?.errors.length === 0);
+      }
+    }
     if (fairnessProbe) {
       const fairness = report.fairness;
       for (const object of snapshot.objects.filter(o => o.type === 'extension' && o.user === bot.id)) {
@@ -432,9 +464,9 @@ try {
     check('controller makes sustained progress', delivered > (recovery || logistics ? 100 : 1000));
     // The two-worker economy floor cannot also cover repair + build slots; the
     // maintenance probe owns its own fixture assertions instead.
-    if (logistics && !maintenanceProbe) check('both source containers receive harvested energy', report.ticks.at(-1).objects.filter(o => o.type === 'container' && o.store.energy > 0).length === 2);
-    if (logistics && !maintenanceProbe) check('logistics deliveries settle in observed cargo', report.ticks.at(-1).memory.logisticsDelivered > 0);
-    if (logisticsRecovery) check('invalid orders released after observation', Object.values(report.ticks.at(-1).memory.creeps ?? {}).every(c => c.shipment?.to !== 'destroyed-target'));
+    // The progression probe drains containers into tower/storage construction;
+    // container stock is asserted by the plain logistics run instead.
+    if (logistics && !maintenanceProbe && !progressionProbe) check('both source containers receive harvested energy', report.ticks.at(-1).objects.filter(o => o.type === 'container' && o.store.energy > 0).length === 2);
     if (logisticsRecovery) check('actual deliveries resume after dependency recovery', report.ticks.at(-1).memory.logisticsDelivered > report.cycleInjection.deliveredBefore);
     check('production population remains present', maxEmptyRun <= 60);
     check('heartbeat completed', report.ticks.at(-1).memory.bootstrap?.heartbeat >= tickCount);

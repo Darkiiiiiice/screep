@@ -176,18 +176,21 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   const extensionCap = CONTROLLER_STRUCTURES[STRUCTURE_EXTENSION]?.[rcl] ?? 0;
   const extensionOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_EXTENSION).length;
   const extensionPlanned = allSites.filter(s => s.structureType === STRUCTURE_EXTENSION).length;
-  const extensionsComplete = extensionOwned + extensionPlanned >= extensionCap && extensionPlanned === 0;
   const towerCap = CONTROLLER_STRUCTURES[STRUCTURE_TOWER]?.[rcl] ?? 0;
   const towerOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_TOWER).length;
   const towerPlanned = allSites.filter(s => s.structureType === STRUCTURE_TOWER).length;
   const storageCap = CONTROLLER_STRUCTURES[STRUCTURE_STORAGE]?.[rcl] ?? 0;
   const storageOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_STORAGE).length;
   const storagePlanned = allSites.filter(s => s.structureType === STRUCTURE_STORAGE).length;
+  // Stage order: extensions to the base economy (5) → tower (defense) → storage
+  // (RCL4 buffer). Placement waits for the previous stage's OWNED count so a
+  // planned tower does not block storage placement; builders below work every
+  // unfinished site in parallel (one sticky builder per site) so the tower and
   const growthType: BuildableStructureConstant | undefined =
-    extensionCap - extensionOwned - extensionPlanned > 0 ? STRUCTURE_EXTENSION
-    : extensionsComplete && towerCap - towerOwned - towerPlanned > 0 ? STRUCTURE_TOWER
-    : extensionsComplete && towerOwned + towerPlanned >= towerCap && storageCap - storageOwned - storagePlanned > 0
-      ? STRUCTURE_STORAGE : undefined;
+    extensionCap - extensionOwned - extensionPlanned > 0 && extensionOwned < 5 ? STRUCTURE_EXTENSION
+    : towerCap - towerOwned - towerPlanned > 0 ? STRUCTURE_TOWER
+    : towerPlanned > 0 && storageCap - storageOwned - storagePlanned > 0 ? STRUCTURE_STORAGE
+    : undefined;
   const growthOwned = growthType === STRUCTURE_EXTENSION ? extensionOwned
     : growthType === STRUCTURE_TOWER ? towerOwned : storageOwned;
   const growthPlanned = growthType === STRUCTURE_EXTENSION ? extensionPlanned
@@ -310,6 +313,8 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   if (!urgent) for (const site of extensionSites) {
     const cap = CONTROLLER_STRUCTURES[site.structureType]?.[rclLevel] ?? 0;
     const planned = (plannedByType.get(site.structureType) ?? 0) - 1;
+    // The cap gates building as well as placement: phantom sites beyond the
+    // controller's allowance are left unbuilt (they time out on their own).
     if (cap - (ownedByType.get(site.structureType) ?? 0) - planned <= 0) continue;
     // Exactly one builder per site: reclaim the sticky worker when present, and
     // clear duplicate flags earlier assignments left on the same site.
@@ -338,8 +343,16 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     if (builder.memory.building) {
       if (builder.build(site) === ERR_NOT_IN_RANGE) travel(builder, site.pos, 3);
     } else {
-      const source = site.pos.findClosestByRange(sources.filter(s => s.energy > 0));
-      if (source && builder.harvest(source) === ERR_NOT_IN_RANGE) travel(builder, source.pos, 1);
+      // Builders refuel from the logistics network (container/storage), not by
+      // competing with miners for source tiles — mining throughput is capped by
+      // the source, and a self-harvesting builder starves at 2 energy/tick.
+      const stock = builder.pos.findClosestByRange(stockpiles.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
+      if (stock) {
+        if (builder.withdraw(stock, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) travel(builder, stock.pos, 1);
+      } else {
+        const source = site.pos.findClosestByRange(sources.filter(s => s.energy > 0));
+        if (source && builder.harvest(source) === ERR_NOT_IN_RANGE) travel(builder, source.pos, 1);
+      }
     }
   }
   // Reserve delivery capacity for cargo already on the road before issuing new pickups.
