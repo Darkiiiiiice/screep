@@ -136,19 +136,16 @@ describe('extension placement and construction', () => {
     expect(createConstructionSite).not.toHaveBeenCalled();
   });
 
-  it('builds an extension site only from genuine surplus workers', () => {
-    // Extension construction is gated on the controller's structure cap (RCL2) and
-    // runs after mining/hauling: a carrying worker is consumed by the haul loop,
-    // so the surplus builder must be an idle empty worker.
+  it('builds an extension site from the dedicated slot above the worker floor', () => {
+    // Extension construction is gated on the controller's structure cap (RCL2)
+    // and claims the one builder slot above the two-worker economy floor, before
+    // hauling: the slot is a first-class labor position, not idle-luck surplus.
     const site = siteStub('ext-site', 'extension');
     const { room } = engineStub({ level: 2, sites: [site] });
     const sources = [{ id: 's1', pos: new Position(5, 5), energy: 3000 }, { id: 's2', pos: new Position(45, 45), energy: 3000 }];
     const workers = [workerStub('w1', 50), workerStub('w2', 0), workerStub('w3', 0), workerStub('w4', 0)];
     runLogistics(room as unknown as Room, workers as unknown as Creep[], sources as unknown as Source[], {});
-    expect(workers[0]!.memory.containerSite).toBeUndefined();
-    const builder = workers.slice(1).find(w => w.memory.containerSite === 'ext-site');
-    expect(builder).toBeDefined();
-    expect(builder!.harvest).toHaveBeenCalled(); // empty builder collects energy first
+    expect(workers[0]!.build).toHaveBeenCalledExactlyOnceWith(site); // carrying builder builds immediately
   });
 
   it('a carrying surplus worker builds immediately when no sink demands energy', () => {

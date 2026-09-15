@@ -278,6 +278,45 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     if (miner.store.energy > 0) miner.transfer(container, RESOURCE_ENERGY);
     if (container.store.getFreeCapacity(RESOURCE_ENERGY) > 0) miner.harvest(source);
   }
+  // Growth sites (extensions, roads, …) are the RCL2-4 development gate: a single
+  // dedicated builder slot above the two-worker floor, claimed after miners but
+  // before hauling so build progress does not depend on idle luck. Urgent repair
+  // pauses this entirely; the RCL cap keeps phantom sites unbuilt.
+  if (!urgent) for (const site of extensionSites) {
+    const cap = CONTROLLER_STRUCTURES[site.structureType]?.[rclLevel] ?? 0;
+    const planned = (plannedByType.get(site.structureType) ?? 0) - 1;
+    if (cap - (ownedByType.get(site.structureType) ?? 0) - planned <= 0) continue;
+    // Exactly one builder per site: reclaim the sticky worker when present, and
+    // clear duplicate flags earlier assignments left on the same site.
+    for (const creep of mobile) if (creep.memory.containerSite === site.id && !eligible.includes(creep)) {
+      delete creep.memory.containerSite;
+      delete creep.memory.containerBuilder;
+    }
+    // Leave at least one worker unclaimed for hauling: extensions must not starve
+    // spawn deliveries (symmetric with the miner floor).
+    if (mobile.length - handled.size <= 1) break;
+    const surplus = eligible.filter(c => !handled.has(c.name) && (!c.memory.containerSite || c.memory.containerSite === site.id));
+    const builder = surplus.find(c => c.memory.containerSite === site.id)
+      ?? surplus.sort((a, b) => b.getActiveBodyparts(WORK) - a.getActiveBodyparts(WORK) || a.pos.getRangeTo(site) - b.pos.getRangeTo(site))[0];
+    if (!builder) continue;
+    for (const other of mobile) if (other !== builder && other.memory.containerSite === site.id) {
+      delete other.memory.containerSite;
+      delete other.memory.containerBuilder;
+    }
+    builder.memory.containerBuilder = true;
+    builder.memory.containerSite = site.id;
+    delete builder.memory.minerSource;
+    delete builder.memory.shipment;
+    handled.add(builder.name);
+    if (!builder.store.energy) builder.memory.building = false;
+    if (!builder.store.getFreeCapacity(RESOURCE_ENERGY)) builder.memory.building = true;
+    if (builder.memory.building) {
+      if (builder.build(site) === ERR_NOT_IN_RANGE) travel(builder, site.pos, 3);
+    } else {
+      const source = site.pos.findClosestByRange(sources.filter(s => s.energy > 0));
+      if (source && builder.harvest(source) === ERR_NOT_IN_RANGE) travel(builder, source.pos, 1);
+    }
+  }
   // Reserve delivery capacity for cargo already on the road before issuing new pickups.
   for (const creep of eligible) {
     if (handled.has(creep.name)) continue;
@@ -305,31 +344,6 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     const source = containers.find(c => c.id === shipment.from)!;
     if (creep.withdraw(source, RESOURCE_ENERGY, shipment.amount) === ERR_NOT_IN_RANGE) travel(creep, source.pos, 1);
     handled.add(creep.name);
-  }
-  // Growth sites (extensions, roads, …) build only from genuine surplus: workers
-  // still unhandled after repair, mining, and hauling have claimed theirs. Urgent
-  // repair pauses this entirely; the RCL cap keeps phantom sites unbuilt.
-  if (!urgent) for (const site of extensionSites) {
-    const cap = CONTROLLER_STRUCTURES[site.structureType]?.[rclLevel] ?? 0;
-    const planned = (plannedByType.get(site.structureType) ?? 0) - 1;
-    if (cap - (ownedByType.get(site.structureType) ?? 0) - planned <= 0) continue;
-    const surplus = eligible.filter(c => !handled.has(c.name));
-    const builder = surplus.find(c => c.memory.containerSite === site.id)
-      ?? surplus.filter(c => !c.memory.containerSite).sort((a, b) => b.getActiveBodyparts(WORK) - a.getActiveBodyparts(WORK) || a.pos.getRangeTo(site) - b.pos.getRangeTo(site))[0];
-    if (!builder) continue;
-    builder.memory.containerBuilder = true;
-    builder.memory.containerSite = site.id;
-    delete builder.memory.minerSource;
-    delete builder.memory.shipment;
-    handled.add(builder.name);
-    if (!builder.store.energy) builder.memory.building = false;
-    if (!builder.store.getFreeCapacity(RESOURCE_ENERGY)) builder.memory.building = true;
-    if (builder.memory.building) {
-      if (builder.build(site) === ERR_NOT_IN_RANGE) travel(builder, site.pos, 3);
-    } else {
-      const source = site.pos.findClosestByRange(sources.filter(s => s.energy > 0));
-      if (source && builder.harvest(source) === ERR_NOT_IN_RANGE) travel(builder, source.pos, 1);
-    }
   }
   return handled;
 }

@@ -18,7 +18,13 @@ export function populationPlan(input: PopulationInput) {
   const units = emergency || imminentLoss ? Math.max(1, Math.min(maximum, affordable)) : maximum;
   const spawnTicks = units * 9;
   const lead = spawnTicks + input.travel + 25;
-  const target = Math.max(2, Math.min(6, input.sources * 2));
+  // Workforce scales with room growth (PLAN §3.2 岗位建模): the M2 economy floor
+  // (sources × 2) is the base; surplus spawn capacity (bigger bodies at higher
+  // RCL) adds labor for build/upgrade/defense. The term depends on CAPACITY
+  // (sustainable), never the oscillating store — target must not flicker with
+  // spawn/haul cycles (PLAN §2.4 反抖动); affordability is gated at spawn time by
+  // `affordable >= units`, not by shrinking the target.
+  const target = Math.max(input.sources * 2, Math.min(12, input.sources * 2 + Math.floor(input.capacity / 300)));
   const future = input.workers.filter(w => w.spawning || w.ttl > lead).length;
   const needed = future < target;
   return {
