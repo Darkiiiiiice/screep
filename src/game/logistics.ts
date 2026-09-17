@@ -124,7 +124,11 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   // diagnosable and do not repeatedly acquire the same logistics reservation.
   const eligible = mobile.filter(c => !c.memory.logisticsRecovery?.stopped && (c.memory.logisticsRecovery?.retryAt ?? 0) <= Game.time);
   // A service lease survives task selection until observed controller progress.
-  // Reserve one worker after 200 ticks without progress, retaining two for the economy.
+  // Reserve one worker after 200 ticks without progress, retaining two for the
+  // economy — or immediately while the downgrade timer sits in the recovery
+  // band above the bootstrap tripwire (3000): the urgent crumb shuttle can
+  // hover at ~3100 forever, refreshing progress without ever restoring margin,
+  // so timer health, not progress attribution, defines a starving controller.
   const controller = room.controller;
   if (controller && mobile.length >= 3) {
     const services = Memory.controllerService ??= {};
@@ -135,7 +139,7 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
       service.level = controller.level;
       delete service.worker;
     }
-    if (Game.time - service.lastProgress >= 200) {
+    if (Game.time - service.lastProgress >= 200 || (controller.ticksToDowngrade ?? 0) < 6000) {
       const worker = mobile.find(c => c.name === service.worker) ?? [...mobile].sort((a, b) => b.store.energy - a.store.energy || a.pos.getRangeTo(controller) - b.pos.getRangeTo(controller))[0]!;
       service.worker = worker.name;
       handled.add(worker.name);

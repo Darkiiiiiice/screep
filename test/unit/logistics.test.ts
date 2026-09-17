@@ -81,3 +81,100 @@ it('keeps per-room task memory isolated when sibling rooms run on shared memory'
   runLogistics(room('W0N1') as unknown as Room, [creep('worker-a')] as unknown as Creep[], [], {});
   expect(Object.keys(memory.logisticsTasks?.W0N2 ?? {})).toContain('haul:worker-b');
 });
+
+it('appoints an upgrader in the downgrade recovery band despite fresh crumb progress', () => {
+  // Live bug 2026-09-17: bootstrap's urgent crumb shuttle kept controller
+  // progress fresh, so the 200-tick stagnation trigger never fired and the
+  // room hovered at the 3000 tripwire with upgrade throughput ~0.
+  class Position {
+    roomName: string;
+    constructor(public x: number, public y: number, room: string) { this.roomName = room; }
+    getRangeTo() { return 10; }
+    isNearTo() { return false; }
+  }
+  const now = 50000;
+  vi.stubGlobal('Game', { time: now, creeps: {} });
+  vi.stubGlobal('RoomPosition', Position);
+  vi.stubGlobal('RESOURCE_ENERGY', 'energy');
+  vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
+  vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
+  vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_TOWER', 'tower');
+  vi.stubGlobal('STRUCTURE_STORAGE', 'storage');
+  vi.stubGlobal('FIND_MY_STRUCTURES', 1);
+  vi.stubGlobal('FIND_MY_SPAWNS', 2);
+  vi.stubGlobal('FIND_MY_CONSTRUCTION_SITES', 3);
+  vi.stubGlobal('FIND_STRUCTURES', 4);
+  vi.stubGlobal('ERR_NOT_IN_RANGE', -10);
+  vi.stubGlobal('CONTROLLER_STRUCTURES', { extension: { 3: 0 }, tower: { 3: 0 }, storage: { 3: 0 } });
+  vi.stubGlobal('OK', 0);
+  const memory: { controllerService?: Record<string, { progress: number; level: number; lastProgress: number; worker?: string }> } = {
+    // Crumbs just refreshed the clock — but the timer is still in the band.
+    controllerService: { W0N1: { progress: 100, level: 3, lastProgress: now - 10 } },
+  };
+  vi.stubGlobal('Memory', memory);
+  const upgraded: string[] = [];
+  const creep = (name: string, energy: number) => ({
+    name, spawning: false, memory: {},
+    store: { energy, getUsedCapacity: () => energy, getFreeCapacity: () => 50 - energy },
+    pos: new Position(25, 25, 'W0N1'),
+    upgradeController: () => { upgraded.push(name); return 0; },
+    harvest: () => 0,
+  });
+  const creeps = [creep('worker-a', 10), creep('worker-rich', 50), creep('worker-b', 0)];
+  const room = {
+    name: 'W0N1',
+    controller: { my: true, ticksToDowngrade: 5000, progress: 102, level: 3, pos: new Position(30, 30, 'W0N1') },
+    find: () => [],
+  };
+  const handled = runLogistics(room as unknown as Room, creeps as unknown as Creep[], [], {});
+  expect(memory.controllerService!.W0N1!.worker).toBe('worker-rich');
+  expect(handled.has('worker-rich')).toBe(true);
+  expect(upgraded).toEqual(['worker-rich']);
+});
+it('lease-held progress refreshes the clock and releases without reappointing in a healthy room', () => {
+  class Position {
+    roomName: string;
+    constructor(public x: number, public y: number, room: string) { this.roomName = room; }
+    getRangeTo() { return 10; }
+    isNearTo() { return false; }
+  }
+  const now = 60000;
+  vi.stubGlobal('Game', { time: now, creeps: {} });
+  vi.stubGlobal('RoomPosition', Position);
+  vi.stubGlobal('RESOURCE_ENERGY', 'energy');
+  vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
+  vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
+  vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_TOWER', 'tower');
+  vi.stubGlobal('STRUCTURE_STORAGE', 'storage');
+  vi.stubGlobal('FIND_MY_STRUCTURES', 1);
+  vi.stubGlobal('FIND_MY_SPAWNS', 2);
+  vi.stubGlobal('FIND_MY_CONSTRUCTION_SITES', 3);
+  vi.stubGlobal('FIND_STRUCTURES', 4);
+  vi.stubGlobal('CONTROLLER_STRUCTURES', { extension: { 3: 0 }, tower: { 3: 0 }, storage: { 3: 0 } });
+  vi.stubGlobal('OK', 0);
+  const memory: { controllerService?: Record<string, { progress: number; level: number; lastProgress: number; worker?: string }> } = {
+    controllerService: { W0N1: { progress: 200, level: 3, lastProgress: now - 1000, worker: 'worker-a' } },
+  };
+  vi.stubGlobal('Memory', memory);
+  const creep = (name: string, energy: number) => ({
+    name, spawning: false, memory: {},
+    store: { energy, getUsedCapacity: () => energy, getFreeCapacity: () => 50 - energy },
+    pos: new Position(25, 25, 'W0N1'),
+    upgradeController: () => 0,
+    harvest: () => 0,
+  });
+  const creeps = [creep('worker-a', 40), creep('worker-b', 20), creep('worker-c', 0)];
+  const room = {
+    name: 'W0N1',
+    // Healthy timer: the recovery-band gate must stay closed here, so the
+    // refreshed clock alone decides — and it must not reappoint.
+    controller: { my: true, ticksToDowngrade: 20000, progress: 201, level: 3, pos: new Position(30, 30, 'W0N1') },
+    find: () => [],
+  };
+  const handled = runLogistics(room as unknown as Room, creeps as unknown as Creep[], [], {});
+  expect(memory.controllerService!.W0N1!.lastProgress).toBe(now);
+  expect(memory.controllerService!.W0N1!.worker).toBeUndefined();
+  expect(handled.size).toBe(0);
+});
