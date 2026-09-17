@@ -3,7 +3,7 @@ import { validatePolicy, type Capabilities } from '../domain/config';
 import { runLogistics, runMiners } from './logistics';
 import { runDefense } from './defense';
 import { flushTraffic, requestMove } from './traffic';
-import { driveScouts, maybeSpawnScout } from './intel';
+import { runEvaluation, driveScouts, maybeSpawnScout } from './intel';
 
 interface WorkerState {
   phase: 'collect' | 'deliver';
@@ -197,6 +197,7 @@ export function runBootstrap(): void {
       isolate(state, 'intel-spawn', () => maybeSpawnScout(room, spawns, plan.spawn || spawnWaiting));
       const handled = Memory.logisticsEnabled === true && !state.degraded ? runLogistics(room, creeps, sources, { spawnWaiting, dedicatedSources: new Set(miners.map(m => m.memory.minerSource).filter((id): id is string => id !== undefined)) }) : new Set<string>();
       if (Memory.logisticsEnabled === true) isolate(state, 'miners', () => runMiners(room, sources));
+      isolate(state, 'intel-eval', () => runEvaluation(room.name));
       creeps.sort((a, b) => a.name.localeCompare(b.name));
       for (let j = 0; j < creeps.length; j++) {
         if (Game.cpu.getUsed() >= executionLimit) { state.degraded = true; break; }

@@ -29,8 +29,12 @@ export interface IntelMemory {
   unreachable?: Record<string, number>;
   /** 在飞 scout 任务台账:scout 失踪时据此判定目标不可达。 */
   missions?: Record<string, ScoutMission>;
-  /** 最近一次 scout 死亡(含退役)的 tick,用于复活冷却。 */
-  lastScoutDeathAt?: number;
+ /** 最近一次 scout 死亡(含退役)的 tick,用于复活冷却。 */
+ lastScoutDeathAt?: number;
+ /** 远矿目标评分快照(EVALUATE 产出,EVAL_TOP 条)。 */
+ evaluation?: { tick: number; targets: { name: string; score: number; sources: number; distance: number }[] };
+ /** home→各房跳数缓存(路由静态,不随时间失效)。 */
+ distances?: Record<string, number>;
 }
 
 /** 重观测周期:超过即视为过期,需要补侦察。 */
@@ -134,4 +138,30 @@ export function observe(snap: RoomSnapshot): RoomIntel {
   if (snap.controller) intel.controller = { ...snap.controller };
   if (snap.mineral) intel.mineral = snap.mineral;
   return intel;
+}
+
+/** 远矿候选评分:单源 100 分制,距离每跳 -10;双源房(200)天然胜过一切近邻单源。 */
+export interface RemoteCandidate { name: string; score: number; sources: number; distance: number }
+/** 评估结果在 Memory 中的驻留上界(§1 队列有界)。 */
+export const EVAL_TOP = 3;
+
+/**
+ * 远矿目标评分(§3.9 EVALUATE,纯):只用新鲜情报;已确认威胁、他人归属、
+ * 他人预留的房间直接出局(§3.6 失去视野≠安全);无源房无价值。
+ * 评分 = sources×100 - distance×10,同分按名字字典序保证确定性。
+ * 返回前 EVAL_TOP 名,空榜 = 暂无合格远矿房。
+ */
+export function evaluateRemoteTargets(args: { rooms: Record<string, RoomIntel>; distances: Record<string, number>; now: number }): RemoteCandidate[] {
+  const candidates: RemoteCandidate[] = [];
+  for (const [name, intel] of Object.entries(args.rooms)) {
+    if (isStale(intel, args.now)) continue;
+    if (intel.threat.hostiles > 0 || intel.threat.towers > 0) continue;
+    if (intel.controller?.owner !== undefined) continue;
+    if (intel.controller?.reserver !== undefined && (intel.controller.reservationTicks ?? 0) > 0) continue;
+    if (intel.sources.length === 0) continue;
+    const distance = args.distances[name];
+    if (distance === undefined) continue;
+    candidates.push({ name, score: intel.sources.length * 100 - distance * 10, sources: intel.sources.length, distance });
+  }
+  return candidates.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).slice(0, EVAL_TOP);
 }

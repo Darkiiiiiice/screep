@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { intelState } from '../../src/game/intel';
 import {
   INTEL_CAP,
+  evaluateRemoteTargets,
   INTEL_STALE,
   UNREACHABLE_TTL,
   isReachable,
@@ -110,4 +111,28 @@ it('maps a room snapshot into an intel record without losing threat detail', () 
   expect(bare.controller).toBeUndefined();
   expect(bare.mineral).toBeUndefined();
   expect(bare.threat.keeperLairs).toBe(3);
+});
+
+it('ranks fresh unowned source rooms by sources then distance, excluding untrusted or occupied rooms', () => {
+  const room = (over: Partial<RoomIntel> = {}): RoomIntel => ({ observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, ...over });
+  const twoSources = room({ sources: [{ id: 's1', x: 1, y: 1 }, { id: 's2', x: 2, y: 2 }] });
+  const rooms: Record<string, RoomIntel> = {
+    single: room(),
+    dual: twoSources,
+    far: twoSources,
+    stale: room({ observedAt: 100 }),
+    hostile: room({ threat: { hostiles: 1, armed: 2, towers: 0, keeperLairs: 0 } }),
+    owned: room({ controller: { level: 3, owner: 'someone' } }),
+    reserved: room({ controller: { level: 0, reserver: 'someone', reservationTicks: 100 } }),
+    barren: room({ sources: [] }),
+    unrouted: room(),
+  };
+  const targets = evaluateRemoteTargets({ rooms, distances: { single: 1, dual: 2, far: 5, stale: 1, hostile: 1, owned: 1, reserved: 1, barren: 1 }, now: 1200 });
+  expect(targets.map(t => t.name)).toEqual(['dual', 'far', 'single']);
+  expect(targets[0]).toMatchObject({ score: 180, sources: 2, distance: 2 });
+});
+
+it('returns an empty board when no room qualifies', () => {
+  const rooms: Record<string, RoomIntel> = { hostile: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0 } } };
+  expect(evaluateRemoteTargets({ rooms, distances: { hostile: 1 }, now: 1200 })).toEqual([]);
 });

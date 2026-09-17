@@ -553,6 +553,11 @@ try {
       check('neutral room intel records both sources with an observation tick',
         rooms.W0N2?.sources?.length === 2 && typeof rooms.W0N2.observedAt === 'number');
       check('neutral room intel records no false ownership', rooms.W0N2?.controller?.owner === undefined && (rooms.W0N2?.threat?.hostiles ?? -1) === 0);
+      const evaluation = report.ticks.at(-1).memory.intel?.evaluation;
+      check('evaluation selects the sourced neutral room as the remote target',
+        evaluation?.targets?.[0]?.name === 'W0N2' && evaluation.targets[0].sources === 2 && evaluation.targets[0].distance === 1);
+      check('evaluation board carries no barren rooms',
+        (evaluation?.targets ?? []).every(t => (rooms[t.name]?.sources ?? []).length > 0));
     }
     report.lifecycle = { births, delivered, maxEmptyRun, maxControllerIdle };
     if (logistics) check('controller service resumes within 400 ticks with three workers', maxControllerIdle <= 400);

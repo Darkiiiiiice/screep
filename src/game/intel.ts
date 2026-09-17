@@ -14,7 +14,7 @@
  */
 import {
   INTEL_CAP,
-  INTEL_STALE,
+  evaluateRemoteTargets,
   isReachable,
   markUnreachable,
   nextScoutTarget,
@@ -169,5 +169,22 @@ export function driveScouts(allies: readonly string[], cpuLimit: number): void {
   }
 }
 
-/** 观测新鲜度供后续 EVALUATE 切片使用;不在本切片消费。 */
-export { INTEL_STALE };
+/** 评估节奏:情报变化远慢于 tick,每 25 tick 重算一次足够。 */
+export const EVAL_INTERVAL = 25;
+
+/**
+ * 远矿目标评分(§3.9 EVALUATE):findRoute 跳数喂给纯决策,结果驻留
+ * Memory.intel.evaluation 供后续 CLAIM/RESERVE/DEPLOY 切片消费。
+ * 本切片只产出决策记录,不孵任何远矿单位。
+ */
+export function runEvaluation(home: string): void {
+  if (Game.time % EVAL_INTERVAL !== 0) return;
+  const intel = intelState();
+  const distances = intel.distances ??= {};
+  for (const name of Object.keys(intel.rooms)) {
+    if (distances[name] !== undefined) continue;
+    const route = Game.map.findRoute(home, name);
+    if (route !== ERR_NO_PATH) distances[name] = route.length;
+  }
+  intel.evaluation = { tick: Game.time, targets: evaluateRemoteTargets({ rooms: intel.rooms, distances, now: Game.time }) };
+}
