@@ -43,8 +43,14 @@ declare global {
 const SCOUT_STUCK_LIMIT = 40;
 
 export function intelState(): IntelMemory {
-  const intel = Memory.intel ??= { schema: 1, rooms: {} };
-  if (intel.schema !== 1) throw new Error(`unsupported intel schema ${String(intel.schema)}`);
+  const intel = Memory.intel;
+  if (intel === undefined) return (Memory.intel = { schema: 1, rooms: {} });
+  if (intel.schema !== 1) {
+    // 旧版本/异源残留(v1 时代遗物、外部脚本写入)无法迁移:
+    // 整体重置而非逐 tick 抛错死锁(线上实证 2026-09-17:v1 残留 {} 卡死情报层)。
+    console.log(`[M4] intel: reset legacy memory (schema ${String(intel.schema)})`);
+    return (Memory.intel = { schema: 1, rooms: {} });
+  }
   return intel;
 }
 

@@ -133,6 +133,12 @@ try {
   bot.on('console', (logs) => report.logs.push(...logs));
   const { db, env } = server.common.storage;
   await env.set(env.keys.MEMORY + bot.id, JSON.stringify(fixture.variants[variant].memory));
+  if (intelProbe) {
+    // v1 遗产:线上实证旧代码遗留 schema-less 的 intel: {}(2026-09-17),
+    // 情报层必须重置恢复而非逐 tick 抛错死锁——探针端到端覆盖该迁移路径。
+    const legacy = { ...fixture.variants[variant].memory, intel: {} };
+    await env.set(env.keys.MEMORY + bot.id, JSON.stringify(legacy));
+  }
   const addCreep = (name, x, y) => server.world.addRoomObject(fixture.room, 'creep', x, y, {
     user: bot.id, name, body: ['work', 'carry', 'move'].map((type) => ({ type, hits: 100 })),
     hits: 300, hitsMax: 300, store: { energy: 0 }, storeCapacity: 50,

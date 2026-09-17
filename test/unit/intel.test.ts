@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import { intelState } from '../../src/game/intel';
 import {
   INTEL_CAP,
   INTEL_STALE,
@@ -54,6 +55,15 @@ it('spawns a scout only past bootstrap on a full spawn without competing demand 
   expect(shouldSpawnScout({ ...base, energyAvailable: 299 })).toBe(false);
   expect(shouldSpawnScout({ ...base, lastScoutDeathAt: 950 })).toBe(false);
   expect(shouldSpawnScout({ ...base, lastScoutDeathAt: undefined })).toBe(true);
+});
+
+it('resets legacy schema-less intel memory instead of deadlocking (v1 residue)', () => {
+  (globalThis as Record<string, unknown>).Memory = { intel: {} };
+  const state = intelState();
+  expect(state.schema).toBe(1);
+  expect(state.rooms).toEqual({});
+  expect(((globalThis as Record<string, unknown>).Memory as { intel: { schema: number } }).intel.schema).toBe(1);
+  delete (globalThis as Record<string, unknown>).Memory;
 });
 
 it('blacklists unreachable targets for a bounded ttl, then allows retry', () => {
