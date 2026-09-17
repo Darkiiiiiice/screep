@@ -458,7 +458,10 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   // containers cap out and the miners stall — the whole surplus dies in the
   // buffers instead of becoming RCL progress. Real sinks reclaim workers next
   // tick through the delivery loop, so upgrade always yields to demand.
-  if (controller && (room.controller?.ticksToDowngrade ?? Infinity) >= 3000) {
+  // It also yields to construction entirely (progression probe, RCL4 stage):
+  // builders refuel from the same containers, and drinking the builder fuel
+  // starves tower/storage sites to zero progress — 有工地时建设优先,升级让位。
+  if (controller && !allSites.length && (room.controller?.ticksToDowngrade ?? Infinity) >= 3000) {
     for (const creep of eligible) {
       if (handled.has(creep.name)) continue;
       if (creep.store.energy > 0) {

@@ -211,8 +211,10 @@ export function driveClaimers(allies: readonly string[], cpuLimit: number): void
     alive.add(creep.name);
     const target = mem.claimTarget;
     const room = target ? intel.rooms[target] : undefined;
+    // 退役判据用武装而非人头:无武装过路斥候不配让我们放弃一个已预定的房
+    // (线上实证:hostiles 判据导致 claimer 见到路人就自杀,650 一具白烧)。
     const invalid = !target || !room || isStale(room, Game.time)
-      || room.threat.hostiles > 0
+      || room.threat.armed > 0
       || (room.controller?.reserver !== undefined && room.controller.reserver !== creep.owner.username);
     if (invalid) {
       creep.suicide();
@@ -259,7 +261,7 @@ export function drivePioneers(cpuLimit: number): void {
     const target = mem.pioneerTarget;
     const home = mem.home ??= creep.room.name;
     const room = target ? intel.rooms[target] : undefined;
-    const hostile = room ? room.threat.hostiles > 0 : false;
+    const hostile = room ? room.threat.armed > 0 : false;
     const invalid = !target || !room || isStale(room, Game.time) || room.controller?.reserver !== creep.owner.username;
 
     // 入侵撤离:在远遇敌立刻回母房;威胁消除(情报刷新)后自动复工。

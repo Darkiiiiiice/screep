@@ -19,10 +19,10 @@ import {
   type IntelMemory,
   type RoomIntel,
 } from '../../src/domain/intel';
-const intelAt = (observedAt: number, hostiles = 0): RoomIntel => ({
+const intelAt = (observedAt: number, hostiles = 0, armed?: number): RoomIntel => ({
   observedAt,
   sources: [],
-  threat: { hostiles, armed: 0, towers: 0, keeperLairs: 0 },
+  threat: { hostiles, armed: armed ?? hostiles, towers: 0, keeperLairs: 0 },
 });
 
 it('treats missing or aged observation as stale, fresh as current', () => {
@@ -35,6 +35,8 @@ it('reports threat only when observation is fresh, never on lost visibility', ()
   expect(threatActive(intelAt(100, 2), 200)).toBe(true);
   expect(threatActive(intelAt(100, 2), 100 + INTEL_STALE)).toBe(false);
   expect(threatActive(intelAt(100, 0), 200)).toBe(false);
+  // 无武装过路斥候不是威胁(线上实证:hostiles 判据让 claimer 见路就自杀)。
+  expect(threatActive(intelAt(100, 1, 0), 200)).toBe(false);
   expect(threatActive(undefined, 200)).toBe(false);
 });
 
@@ -132,6 +134,11 @@ it('ranks fresh unowned source rooms by sources then distance, excluding untrust
   const targets = evaluateRemoteTargets({ rooms, distances: { single: 1, dual: 2, far: 5, stale: 1, hostile: 1, owned: 1, reserved: 1, barren: 1 }, me: 'me', now: 1200 });
   expect(targets.map(t => t.name)).toEqual(['dual', 'far', 'single']);
   expect(targets[0]).toMatchObject({ score: 180, sources: 2, distance: 2 });
+});
+
+it('keeps rooms with unarmed passersby on the board', () => {
+  const rooms: Record<string, RoomIntel> = { visited: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 2, armed: 0, towers: 0, keeperLairs: 0 } } };
+  expect(evaluateRemoteTargets({ rooms, distances: { visited: 1 }, me: 'me', now: 1200 }).map(t => t.name)).toEqual(['visited']);
 });
 
 it('keeps self-reserved rooms on the board for the DEPLOY step', () => {

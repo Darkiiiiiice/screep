@@ -73,7 +73,7 @@ export function isStale(intel: RoomIntel | undefined, now: number, horizon: numb
  * 失去视野不等于安全——过期的威胁记录由调用方按保守策略处理。
  */
 export function threatActive(intel: RoomIntel | undefined, now: number, horizon: number = INTEL_STALE): boolean {
-  return !isStale(intel, now, horizon) && (intel!.threat.hostiles > 0 || intel!.threat.towers > 0);
+  return !isStale(intel, now, horizon) && (intel!.threat.armed > 0 || intel!.threat.towers > 0);
 }
 
 /**
@@ -158,6 +158,9 @@ export const EVAL_TOP = 3;
 /**
  * 远矿目标评分(§3.9 EVALUATE,纯):只用新鲜情报;已确认威胁、他人归属、
  * 他人预留的房间直接出局(§3.6 失去视野≠安全);无源房无价值。
+ * 威胁 = 武装部件(ATTACK/RANGED/HEAL/WORK/CLAIM,观测时已计入 armed)或敌塔;
+ * 无武装的过路斥候不构成威胁——线上实证(2026-09-17):把路人当入侵者会让
+ * 预定者无限自杀循环,房间永远锁不住。
  * 我方自己的预定必须留在榜上——CLAIM 之后 DEPLOY 才找得到目标,
  * 否则预定一生效评估就把房间扔掉,流水线自我截断。
  * 评分 = sources×100 - distance×10,同分按名字字典序保证确定性。
@@ -167,7 +170,7 @@ export function evaluateRemoteTargets(args: { rooms: Record<string, RoomIntel>; 
   const candidates: RemoteCandidate[] = [];
   for (const [name, intel] of Object.entries(args.rooms)) {
     if (isStale(intel, args.now)) continue;
-    if (intel.threat.hostiles > 0 || intel.threat.towers > 0) continue;
+    if (intel.threat.armed > 0 || intel.threat.towers > 0) continue;
     if (intel.controller?.owner !== undefined) continue;
     if (intel.controller?.reserver !== undefined && intel.controller.reserver !== args.me && (intel.controller.reservationTicks ?? 0) > 0) continue;
     if (intel.sources.length === 0) continue;
