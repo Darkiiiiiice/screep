@@ -22,7 +22,7 @@
 - **现象**:降级倒计时在红线 3000 附近振荡(6070→3785→2996→3047→2996),控制器进度整窗口 +2;`Memory.controllerService` 的 `worker` 长期为空而 `lastProgress` 永远新鲜。
 - **根因(互锁)**:倒计时 <3000 时 bootstrap 紧急模式让全体工人带零头能量救场(+2 进度/百 tick); crumbs 一越过红线,logistics 恢复——但 crumbs 刚刷新的 `lastProgress` 使「200 tick 停滞才任命升级员」的触发器永远不满足,专职升级员永不任命;能量流向缓冲/工地,倒计时再滑回 3000。两套应急机制互相掩盖,房间卡在「不死不活」平衡:不降级,但也永远攒不出 RCL4 进度。
 - **修复**(commit 见 git log):`src/game/logistics.ts` 租约任命条件改为 `停滞≥200 tick || ticksToDowngrade<6000`(恢复带)——控制器健康由计时器水位而非进度归属定义。首版「按租约归属刷新」方案被 `test:logistics-construction` 抓出过度任命挤占经济,已改为计时器水位门控。
-- **验证**:新增 2 项回归单测(恢复带内 crumbs 不阻挡任命;健康房间不白任命),红-绿双向证明;完整门禁 21/21 全绿(typecheck/lint/72 单测/build/smoke/14 场景+progression×2)。部署 sha256 `017bb2dd3c97`,回滚基线 `artifacts/live/baseline-1789616787904`。
+- **验证**:新增 2 项回归单测(恢复带内 crumbs 不阻挡任命;健康房间不白任命),红-绿双向证明;完整门禁 21/21 全绿(typecheck/lint/72 单测/build/smoke/14 场景+progression×2)。部署 sha256 `017bb2dd3c97`,回滚基线 `artifacts/live/baseline-1789616787904`。**线上三相位已观测闭环**:crumbs 推过 3000 → 租约任命(`worker-W35S2-83030327`)→ 倒计时 2987→6003 爬出恢复带 → 租约按设计自动休眠。
 
 ## 未覆盖(观察项,不阻塞核心验收)
 
