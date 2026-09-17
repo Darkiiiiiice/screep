@@ -37,6 +37,26 @@ export function populationPlan(input: PopulationInput) {
   };
 }
 
+/** 专职矿工身体:[WORK×5, CARRY, MOVE]=650——单源满采(10/tick)且带一格货架向脚下容器过货。 */
+export const MINER_BODY_COST = 650;
+/** 专职矿工的容量门槛:身体必须全额可付,低配房间继续用通用工兼任。 */
+export const MINER_MIN_CAPACITY = MINER_BODY_COST;
+/** 工人地板:矿工不搬运,至少留 2 搬运 + 升级/维修余量才许孵矿工。 */
+export const MINER_WORKER_FLOOR = 4;
+
+export interface MinerSourceState { id: string; hasContainer: boolean; minerAlive: boolean }
+
+/**
+ * 专职矿工补员决策(纯):源旁容器已就位且无在役矿工(含孵化中)时,
+ * 从盈余能量孵一只 5-WORK 矿工顶替兼任。工人补员优先——矿工是盈余支出,
+ * 不得动用补员/恢复经费(与 scout 三门同源,PLAN §3.1 补员优先)。
+ */
+export function minerSpawnNeed(args: { capacity: number; energyAvailable: number; workerCount: number; workerSpawnPending: boolean; sources: readonly MinerSourceState[] }): string | undefined {
+  if (args.capacity < MINER_MIN_CAPACITY || args.energyAvailable < MINER_BODY_COST) return undefined;
+  if (args.workerCount < MINER_WORKER_FLOOR || args.workerSpawnPending) return undefined;
+  return args.sources.filter(s => s.hasContainer && !s.minerAlive).map(s => s.id).sort()[0];
+}
+
 export interface ProgressState { x: number; y: number; energy: number; unchanged: number }
 export function trackProgress(previous: ProgressState | undefined, x: number, y: number, energy: number): ProgressState {
   return { x, y, energy, unchanged: previous?.x === x && previous.y === y && previous.energy === energy ? previous.unchanged + 1 : 0 };

@@ -29,7 +29,7 @@ declare global {
 }
 
 /** Assign at most one miner per container while retaining mobile recovery workers. */
-export function runLogistics(room: Room, creeps: Creep[], sources: Source[], context?: { spawnWaiting?: boolean }): Set<string> {
+export function runLogistics(room: Room, creeps: Creep[], sources: Source[], context?: { spawnWaiting?: boolean; dedicatedSources?: ReadonlySet<string> }): Set<string> {
   const handled = new Set<string>();
   // Let bootstrap's urgent controller policy arbitrate before logistics consumes cargo.
   if ((room.controller?.ticksToDowngrade ?? Infinity) < 3000) return handled;
@@ -317,7 +317,10 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   const board = new LogisticsBoard([...stockpiles.map(c => ({ id: c.id, amount: c.store.getUsedCapacity(RESOURCE_ENERGY) })),
     ...mobile.map(c => ({ id: `cargo:${c.name}`, amount: c.store.energy }))],
     sinks.map(s => ({ id: s.id, amount: s.store.getFreeCapacity(RESOURCE_ENERGY), priority: ranked.length - ranked.findIndex(c => c.id === s.id) })));
+  // 专职矿工(M4)已认领的源不再从工人里兼任——容器只有一个站位;名单由调用方传入。
+  const dedicatedSources = context?.dedicatedSources;
   for (const source of sources) {
+    if (dedicatedSources?.has(source.id) === true) continue;
     if (mobile.length - handled.size <= 2) break;
     const container = containers.find(c => c.pos.isNearTo(source));
     if (!container) continue;
@@ -450,4 +453,25 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     handled.add(creep.name);
   }
   return handled;
+}
+
+/**
+ * 专职矿工驱动(M4):站上源旁容器、过货、满采,永不参与搬运/施工。
+ * 容器被拆或源记录丢失时回收为通用工——5W1C1M 是合格身体,不浪费尸体。
+ */
+export function runMiners(room: Room, sources: Source[]): void {
+  const containers = room.find(FIND_STRUCTURES).filter((s): s is StructureContainer => s.structureType === STRUCTURE_CONTAINER);
+  for (const miner of room.find(FIND_MY_CREEPS)) {
+    if (miner.memory.role !== 'miner' || miner.spawning) continue;
+    const source = sources.find(s => s.id === miner.memory.minerSource);
+    const container = source && containers.find(c => c.pos.isNearTo(source));
+    if (!source || !container) {
+      miner.memory.role = 'worker';
+      delete miner.memory.minerSource;
+      continue;
+    }
+    if (!miner.pos.isEqualTo(container.pos)) { travel(miner, container.pos, 0); continue; }
+    if (miner.store.energy > 0) miner.transfer(container, RESOURCE_ENERGY);
+    if (container.store.getFreeCapacity(RESOURCE_ENERGY) > 0) miner.harvest(source);
+  }
 }

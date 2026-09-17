@@ -1,6 +1,6 @@
-import { energyBudget, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
+import { energyBudget, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
 import { validatePolicy, type Capabilities } from '../domain/config';
-import { runLogistics } from './logistics';
+import { runLogistics, runMiners } from './logistics';
 import { runDefense } from './defense';
 import { flushTraffic, requestMove } from './traffic';
 import { driveScouts, maybeSpawnScout } from './intel';
@@ -148,7 +148,9 @@ export function runBootstrap(): void {
     isolate(state, room.name, () => {
       isolate(state, 'defense', () => runDefense(room, policy.policy.allies));
       const sources = room.find(FIND_SOURCES);
-      const creeps = room.find(FIND_MY_CREEPS).filter(c => c.getActiveBodyparts(WORK) > 0 && c.getActiveBodyparts(CARRY) > 0 && c.getActiveBodyparts(MOVE) > 0);
+      const roomCreeps = room.find(FIND_MY_CREEPS);
+      const creeps = roomCreeps.filter(c => c.memory.role !== 'miner' && c.getActiveBodyparts(WORK) > 0 && c.getActiveBodyparts(CARRY) > 0 && c.getActiveBodyparts(MOVE) > 0);
+      const miners = roomCreeps.filter(c => c.memory.role === 'miner');
       const spawns = room.find(FIND_MY_SPAWNS);
       const travel = Math.max(10, ...sources.map(s => spawns[0]?.pos.getRangeTo(s) ?? 50)) * 4;
       const plan = populationPlan({ energy: room.energyAvailable, capacity: room.energyCapacityAvailable, sources: sources.length,
@@ -178,10 +180,23 @@ export function runBootstrap(): void {
           spawn?.spawnCreep(constructionBody ? [WORK, WORK, CARRY, MOVE] : body, `worker-${room.name}-${Game.time}`, { memory: { role: 'worker' } });
         }
       }
-      const cursor = state.workerCursors![room.name] ?? 0;
       const spawnWaiting = spawns.length > 0 && plan.reserve > 0 && !plan.spawn && room.energyAvailable < plan.cost && spawns.some(s => !s.spawning);
+      // 专职矿工补员:工人补员(plan.spawn)与储备等待(spawnWaiting)均优先;
+      // 矿工花的是满员工人口粮之外的盈余(§3.1 补员优先)。
+      if (!plan.spawn) {
+        const idle = spawns.find(s => !s.spawning);
+        if (idle) {
+          const containers = room.find(FIND_STRUCTURES).filter(s => s.structureType === STRUCTURE_CONTAINER);
+          const need = minerSpawnNeed({ capacity: room.energyCapacityAvailable, energyAvailable: room.energyAvailable,
+            workerCount: creeps.length, workerSpawnPending: spawnWaiting,
+            sources: sources.map(s => ({ id: s.id, hasContainer: containers.some(c => c.pos.isNearTo(s)), minerAlive: miners.some(m => m.memory.minerSource === s.id) })) });
+          if (need) idle.spawnCreep([WORK, WORK, WORK, WORK, WORK, CARRY, MOVE], `miner-${room.name}-${Game.time}`, { memory: { role: 'miner', minerSource: need } });
+        }
+      }
+      const cursor = state.workerCursors![room.name] ?? 0;
       isolate(state, 'intel-spawn', () => maybeSpawnScout(room, spawns, plan.spawn || spawnWaiting));
-      const handled = Memory.logisticsEnabled === true && !state.degraded ? runLogistics(room, creeps, sources, { spawnWaiting }) : new Set<string>();
+      const handled = Memory.logisticsEnabled === true && !state.degraded ? runLogistics(room, creeps, sources, { spawnWaiting, dedicatedSources: new Set(miners.map(m => m.memory.minerSource).filter((id): id is string => id !== undefined)) }) : new Set<string>();
+      if (Memory.logisticsEnabled === true) isolate(state, 'miners', () => runMiners(room, sources));
       creeps.sort((a, b) => a.name.localeCompare(b.name));
       for (let j = 0; j < creeps.length; j++) {
         if (Game.cpu.getUsed() >= executionLimit) { state.degraded = true; break; }
