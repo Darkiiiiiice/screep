@@ -3,6 +3,7 @@ import { intelState } from '../../src/game/intel';
 import {
   INTEL_CAP,
   claimerSpawnNeed,
+  pioneerSpawnNeed,
   evaluateRemoteTargets,
   INTEL_STALE,
   UNREACHABLE_TTL,
@@ -128,14 +129,20 @@ it('ranks fresh unowned source rooms by sources then distance, excluding untrust
     barren: room({ sources: [] }),
     unrouted: room(),
   };
-  const targets = evaluateRemoteTargets({ rooms, distances: { single: 1, dual: 2, far: 5, stale: 1, hostile: 1, owned: 1, reserved: 1, barren: 1 }, now: 1200 });
+  const targets = evaluateRemoteTargets({ rooms, distances: { single: 1, dual: 2, far: 5, stale: 1, hostile: 1, owned: 1, reserved: 1, barren: 1 }, me: 'me', now: 1200 });
   expect(targets.map(t => t.name)).toEqual(['dual', 'far', 'single']);
   expect(targets[0]).toMatchObject({ score: 180, sources: 2, distance: 2 });
 });
 
+it('keeps self-reserved rooms on the board for the DEPLOY step', () => {
+  const rooms: Record<string, RoomIntel> = { mine: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'me', reservationTicks: 4000 } } };
+  expect(evaluateRemoteTargets({ rooms, distances: { mine: 1 }, me: 'me', now: 1200 }).map(t => t.name)).toEqual(['mine']);
+  expect(evaluateRemoteTargets({ rooms, distances: { mine: 1 }, me: 'other', now: 1200 })).toEqual([]);
+});
+
 it('returns an empty board when no room qualifies', () => {
   const rooms: Record<string, RoomIntel> = { hostile: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0 } } };
-  expect(evaluateRemoteTargets({ rooms, distances: { hostile: 1 }, now: 1200 })).toEqual([]);
+  expect(evaluateRemoteTargets({ rooms, distances: { hostile: 1 }, me: 'me', now: 1200 })).toEqual([]);
 });
 
 it('spawns a claimer only on full surplus against the top evaluated target needing reservation', () => {
@@ -160,4 +167,29 @@ it('spawns a claimer only on full surplus against the top evaluated target needi
   expect(claimerSpawnNeed({ ...base, intel: reserved })).toBeNull();
   reserved.rooms.W0N2!.controller = { level: 0, reserver: 'me', reservationTicks: 1000 };
   expect(claimerSpawnNeed({ ...base, intel: reserved })).toBe('W0N2');
+});
+
+it('spawns a pioneer only against a self-reserved fresh top target on full surplus', () => {
+  const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
+    schema: 1,
+    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'me', reservationTicks: 4000 } } },
+    evaluation: { tick: 1000, targets: [{ name: 'W0N2', score: 180, sources: 2, distance: 1 }] },
+    ...over,
+  });
+  const base = { intel: intel(), workers: 6, capacity: 800, energyAvailable: 650, pioneerAlive: false, me: 'me', now: 1200 };
+  expect(pioneerSpawnNeed(base)).toBe('W0N2');
+  expect(pioneerSpawnNeed({ ...base, capacity: 399 })).toBeNull();
+  expect(pioneerSpawnNeed({ ...base, energyAvailable: 399 })).toBeNull();
+  expect(pioneerSpawnNeed({ ...base, workers: 3 })).toBeNull();
+  expect(pioneerSpawnNeed({ ...base, pioneerAlive: true })).toBeNull();
+  expect(pioneerSpawnNeed({ ...base, intel: intel({ lastPioneerDeathAt: 1100 }) })).toBeNull();
+  const unreserved = intel();
+  unreserved.rooms.W0N2!.controller = { level: 0 };
+  expect(pioneerSpawnNeed({ ...base, intel: unreserved })).toBeNull();
+  const foreign = intel();
+  foreign.rooms.W0N2!.controller = { level: 0, reserver: 'someone', reservationTicks: 4000 };
+  expect(pioneerSpawnNeed({ ...base, intel: foreign })).toBeNull();
+  const stale = intel();
+  stale.rooms.W0N2!.observedAt = 100;
+  expect(pioneerSpawnNeed({ ...base, intel: stale, now: 5000 })).toBeNull();
 });

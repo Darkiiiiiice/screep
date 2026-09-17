@@ -39,6 +39,8 @@ declare global {
     stuck?: number;
     /** 预定者目标房名(§3.9 CLAIM/RESERVE)。 */
     claimTarget?: string;
+    /** 远矿工人目标房名(§3.9 DEPLOY)。 */
+    pioneerTarget?: string;
   }
 }
 
@@ -189,7 +191,9 @@ export function runEvaluation(home: string): void {
     const route = Game.map.findRoute(home, name);
     if (route !== ERR_NO_PATH) distances[name] = route.length;
   }
-  intel.evaluation = { tick: Game.time, targets: evaluateRemoteTargets({ rooms: intel.rooms, distances, now: Game.time }) };
+  const me = Game.rooms[home]?.controller?.owner?.username;
+  if (!me) return;
+  intel.evaluation = { tick: Game.time, targets: evaluateRemoteTargets({ rooms: intel.rooms, distances, me, now: Game.time }) };
 }
 
 /**
@@ -236,4 +240,77 @@ export function driveClaimers(allies: readonly string[], cpuLimit: number): void
   }
   const active = Object.values(Game.creeps).find(c => c.memory.role === 'claimer');
   if (active) intel.claimerActive = active.name;
+}
+
+/**
+ * 每 tick 驱动远矿工人(全局单位,§3.9 DEPLOY):采满自运回母房的闭环。
+ * 威胁情报到达即在远撤离回母房(不自杀,保命等复工);目标失效(过期/
+ * 不再是我方预定)送完手上货后退役。送达量计入 pioneerDelivered,
+ * 供"远矿净收益为正"的验收核算。
+ */
+export function drivePioneers(cpuLimit: number): void {
+  const intel = intelState();
+  const alive = new Set<string>();
+  for (const creep of Object.values(Game.creeps)) {
+    const mem = creep.memory;
+    if (mem.role !== 'pioneer' || creep.spawning) continue;
+    if (Game.cpu.getUsed() >= cpuLimit) break;
+    alive.add(creep.name);
+    const target = mem.pioneerTarget;
+    const home = mem.home ??= creep.room.name;
+    const room = target ? intel.rooms[target] : undefined;
+    const hostile = room ? room.threat.hostiles > 0 : false;
+    const invalid = !target || !room || isStale(room, Game.time) || room.controller?.reserver !== creep.owner.username;
+
+    // 入侵撤离:在远遇敌立刻回母房;威胁消除(情报刷新)后自动复工。
+    if (hostile && creep.room.name === target) {
+      creep.say('🚨');
+      creep.moveTo(new RoomPosition(25, 25, home), { range: 22, reusePath: 20 });
+      continue;
+    }
+    if (invalid) {
+      if (creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0 && creep.room.name !== home) {
+        creep.moveTo(new RoomPosition(25, 25, home), { range: 22, reusePath: 20 });
+      } else {
+        creep.suicide();
+      }
+      continue;
+    }
+
+    if (creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+      if (creep.room.name !== target) {
+        try {
+          creep.moveTo(new RoomPosition(25, 25, target), { range: 22, reusePath: 20 });
+        } catch {
+          markUnreachable(intel, target, Game.time);
+          creep.suicide();
+        }
+        continue;
+      }
+      const source = creep.pos.findClosestByRange(FIND_SOURCES_ACTIVE);
+      if (!source) continue;
+      if (creep.pos.isNearTo(source)) creep.harvest(source);
+      else creep.moveTo(source);
+    } else {
+      if (creep.room.name !== home) {
+        creep.moveTo(new RoomPosition(25, 25, home), { range: 22, reusePath: 20 });
+        continue;
+      }
+      const sinks = creep.room.find(FIND_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension | StructureContainer =>
+        (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION || s.structureType === STRUCTURE_CONTAINER)
+        && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
+      const sink = creep.pos.findClosestByRange(sinks);
+      if (!sink) continue;
+      if (creep.pos.isNearTo(sink)) {
+        const carried = creep.store.getUsedCapacity(RESOURCE_ENERGY);
+        if (creep.transfer(sink, RESOURCE_ENERGY) === OK) intel.pioneerDelivered = (intel.pioneerDelivered ?? 0) + Math.min(carried, sink.store.getFreeCapacity(RESOURCE_ENERGY));
+      } else creep.moveTo(sink);
+    }
+  }
+  if (intel.pioneerActive && !alive.has(intel.pioneerActive) && !Object.values(Game.creeps).some(c => c.name === intel.pioneerActive)) {
+    intel.lastPioneerDeathAt = Game.time;
+    delete intel.pioneerActive;
+  }
+  const active = Object.values(Game.creeps).find(c => c.memory.role === 'pioneer');
+  if (active) intel.pioneerActive = active.name;
 }

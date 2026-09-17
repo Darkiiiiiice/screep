@@ -1,10 +1,10 @@
 import { energyBudget, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
 import { validatePolicy, type Capabilities } from '../domain/config';
-import { claimerSpawnNeed } from '../domain/intel';
+import { claimerSpawnNeed, pioneerSpawnNeed } from '../domain/intel';
 import { runLogistics, runMiners } from './logistics';
 import { runDefense } from './defense';
 import { flushTraffic, requestMove } from './traffic';
-import { driveClaimers, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
+import { driveClaimers, drivePioneers, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
 
 interface WorkerState {
   phase: 'collect' | 'deliver';
@@ -198,6 +198,13 @@ export function runBootstrap(): void {
               energyAvailable: room.energyAvailable, claimerAlive: Object.values(Game.creeps).some(c => c.memory.role === 'claimer'),
               me: idle.owner.username, now: Game.time });
             if (claimTarget) idle.spawnCreep([CLAIM, MOVE], `claimer-${room.name}-${Game.time}`, { memory: { role: 'claimer', claimTarget } });
+            else {
+              // 远矿工人:预定生效后的第三顺位盈余(§3.9 DEPLOY)。
+              const pioneerTarget = pioneerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
+                energyAvailable: room.energyAvailable, pioneerAlive: Object.values(Game.creeps).some(c => c.memory.role === 'pioneer'),
+                me: idle.owner.username, now: Game.time });
+              if (pioneerTarget) idle.spawnCreep([WORK, WORK, CARRY, CARRY, MOVE, MOVE], `pioneer-${room.name}-${Game.time}`, { memory: { role: 'pioneer', pioneerTarget, home: room.name } });
+            }
           }
         }
       }
@@ -220,6 +227,7 @@ export function runBootstrap(): void {
   }
   isolate(state, 'intel', () => driveScouts(policy.policy.allies, executionLimit));
   isolate(state, 'claim', () => driveClaimers(policy.policy.allies, executionLimit));
+  isolate(state, 'pioneers', () => drivePioneers(executionLimit));
   state.rooms = { ...state.rooms, ...activeRooms };
   for (const name of Object.keys(state.rooms)) {
     if (Game.rooms[name] && !Game.rooms[name]!.controller?.my) {

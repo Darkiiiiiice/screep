@@ -35,6 +35,12 @@ export interface IntelMemory {
  lastClaimerDeathAt?: number;
  /** 在飞预定者名(失踪判定用)。 */
  claimerActive?: string;
+ /** 最近一次远矿工人死亡的 tick,用于死亡冷却。 */
+ lastPioneerDeathAt?: number;
+ /** 在飞远矿工人名(失踪判定用)。 */
+ pioneerActive?: string;
+ /** 远矿工人累计送回家的能量(净收益核算,§3.9 验收)。 */
+ pioneerDelivered?: number;
  /** 远矿目标评分快照(EVALUATE 产出,EVAL_TOP 条)。 */
  evaluation?: { tick: number; targets: { name: string; score: number; sources: number; distance: number }[] };
  /** home→各房跳数缓存(路由静态,不随时间失效)。 */
@@ -152,16 +158,18 @@ export const EVAL_TOP = 3;
 /**
  * 远矿目标评分(§3.9 EVALUATE,纯):只用新鲜情报;已确认威胁、他人归属、
  * 他人预留的房间直接出局(§3.6 失去视野≠安全);无源房无价值。
+ * 我方自己的预定必须留在榜上——CLAIM 之后 DEPLOY 才找得到目标,
+ * 否则预定一生效评估就把房间扔掉,流水线自我截断。
  * 评分 = sources×100 - distance×10,同分按名字字典序保证确定性。
  * 返回前 EVAL_TOP 名,空榜 = 暂无合格远矿房。
  */
-export function evaluateRemoteTargets(args: { rooms: Record<string, RoomIntel>; distances: Record<string, number>; now: number }): RemoteCandidate[] {
+export function evaluateRemoteTargets(args: { rooms: Record<string, RoomIntel>; distances: Record<string, number>; me: string; now: number }): RemoteCandidate[] {
   const candidates: RemoteCandidate[] = [];
   for (const [name, intel] of Object.entries(args.rooms)) {
     if (isStale(intel, args.now)) continue;
     if (intel.threat.hostiles > 0 || intel.threat.towers > 0) continue;
     if (intel.controller?.owner !== undefined) continue;
-    if (intel.controller?.reserver !== undefined && (intel.controller.reservationTicks ?? 0) > 0) continue;
+    if (intel.controller?.reserver !== undefined && intel.controller.reserver !== args.me && (intel.controller.reservationTicks ?? 0) > 0) continue;
     if (intel.sources.length === 0) continue;
     const distance = args.distances[name];
     if (distance === undefined) continue;
@@ -203,5 +211,37 @@ export function claimerSpawnNeed(args: {
   if (!room || isStale(room, args.now)) return null;
   const controller = room.controller;
   if (controller?.reserver === args.me && (controller.reservationTicks ?? 0) >= CLAIMER_RESERVE_REFRESH) return null;
+  return target;
+}
+
+/** 远矿工人身体 [WORK×2, CARRY×2, MOVE×2] 造价:采满自运回母房。 */
+export const PIONEER_BODY_COST = 400;
+/** 与矿工/预定者同地板:远矿是满员工人口粮外的第三顺位盈余。 */
+export const PIONEER_WORKER_FLOOR = 4;
+/** 远矿工人死亡冷却(§1 失败有界)。 */
+export const PIONEER_DEATH_COOLDOWN = 300;
+
+/**
+ * 远矿工人孵化决策(§3.9 DEPLOY,纯):榜首目标须为我方已预定(CLAIM 先行,
+ * 流程顺序不许跳步)、情报新鲜;四重盈余门(容量/全额/工人地板/无在飞)
+ * 与死亡冷却同源。每个目标只养一名远矿工人(v1 预算控制)。
+ */
+export function pioneerSpawnNeed(args: {
+  intel: IntelMemory;
+  workers: number;
+  capacity: number;
+  energyAvailable: number;
+  pioneerAlive: boolean;
+  me: string;
+  now: number;
+}): string | null {
+  if (args.capacity < PIONEER_BODY_COST || args.energyAvailable < PIONEER_BODY_COST) return null;
+  if (args.workers < PIONEER_WORKER_FLOOR || args.pioneerAlive) return null;
+  if (args.intel.lastPioneerDeathAt !== undefined && args.now - args.intel.lastPioneerDeathAt < PIONEER_DEATH_COOLDOWN) return null;
+  const target = args.intel.evaluation?.targets[0]?.name;
+  if (!target) return null;
+  const room = args.intel.rooms[target];
+  if (!room || isStale(room, args.now) || room.sources.length === 0) return null;
+  if (room.controller?.reserver !== args.me) return null;
   return target;
 }

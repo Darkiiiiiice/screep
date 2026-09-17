@@ -29,6 +29,7 @@ const progressionProbe = args.includes('--progression-probe');
 const intelProbe = args.includes('--intel-probe');
 const minersProbe = args.includes('--miners-probe');
 const claimProbe = args.includes('--claim-probe');
+const pioneerProbe = args.includes('--pioneer-probe');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -40,7 +41,8 @@ assert(!progressionProbe || lifecycle && logistics && !construction && !fairness
 assert(!intelProbe || lifecycle && logistics && !construction && !fairnessProbe && !multiRoom, '--intel-probe requires --lifecycle --logistics');
 assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe, '--miners-probe requires --lifecycle --logistics');
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+assert(!pioneerProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--pioneer-probe requires --lifecycle --logistics');
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : pioneerProbe ? 1000 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -275,6 +277,37 @@ try {
     }
     await env.set(env.keys.MEMORY + bot.id, JSON.stringify({ logisticsEnabled: true, intel: { schema: 1, rooms: { W0N2: { observedAt: 1, sources: [{ id: 'seeded-1', x: 1, y: 1 }, { id: 'seeded-2', x: 2, y: 2 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0 } } }, distances: { W0N2: 1 } } }));
     report.claim = { room: 'W0N2' };
+  }
+  if (pioneerProbe) {
+    // 远矿工人切片:claim 同款经济底座;W0N2 预置我方有效预定(引擎对象 +
+    // 情报双写)→ 预定者需求落空,远矿工人第一 tick 上场,跑采矿-回运闭环。
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 3, progress: 0 } });
+    for (const [x, y] of [[24, 23], [26, 23], [23, 26], [27, 24], [24, 27], [22, 25], [26, 22], [23, 24]]) {
+      await server.world.addRoomObject(fixture.room, 'extension', x, y, { user: bot.id, store: { energy: 50 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
+    }
+    for (const [i, [x, y]] of [[20, 20], [22, 22], [28, 28], [24, 20], [20, 24], [28, 24]].entries()) {
+      await server.world.addRoomObject(fixture.room, 'creep', x, y, {
+        user: bot.id, name: `worker-seeded-${i}`, body: [{ type: 'work', hits: 100 }, { type: 'carry', hits: 100 }, { type: 'move', hits: 100 }],
+        hits: 300, hitsMax: 300, store: { energy: 0 }, storeCapacity: 50, fatigue: 0, spawning: false, ageTime: 1501, actionLog: {},
+      });
+    }
+    const ring = ['W1N1', 'W1N0', 'W1N2', 'W0N0', 'W0N2', 'E0N1', 'E0N0', 'E0N2'];
+    for (const name of ring) {
+      await server.world.addRoom(name);
+      await server.world.setTerrain(name, new TerrainMatrix());
+    }
+    // 封死施工排水口:双容器+塔预置(RCL3 塔上限 1)→ 无工地,盈余才轮到
+    // 远矿工人;否则塔工地 5000 进度把能量钉死在低位(与线上同现象)。
+    for (const [sx, sy] of fixture.sources) {
+      await server.world.addRoomObject(fixture.room, 'container', sx + 1, sy, { store: { energy: 0 }, storeCapacity: 2000, hits: 250000, hitsMax: 250000, nextDecayTime: 100000 });
+    }
+    await server.world.addRoomObject(fixture.room, 'tower', 24, 25, { user: bot.id, store: { energy: 1000 }, storeCapacityResource: { energy: 1000 }, hits: 3000, hitsMax: 3000 });
+    await server.world.addRoomObject('W0N2', 'controller', 10, 12, { level: 0, reservation: { user: bot.id, endTime: 100000 } });
+    for (const [x, y] of fixture.sources) {
+      await server.world.addRoomObject('W0N2', 'source', x, y, { energy: 3000, energyCapacity: 3000, nextRegenerationTime: 301 });
+    }
+    await env.set(env.keys.MEMORY + bot.id, JSON.stringify({ logisticsEnabled: true, intel: { schema: 1, rooms: { W0N2: { observedAt: 1, sources: [{ id: 'seeded-1', x: 1, y: 1 }, { id: 'seeded-2', x: 2, y: 2 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'M0', reservationTicks: 4000 } } }, distances: { W0N2: 1 } } }));
+    report.pioneer = { room: 'W0N2' };
   }
   if (fairnessProbe) {
     await server.world.addRoomObject(fixture.room, 'extension', 26, 25, { user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
@@ -575,8 +608,10 @@ try {
         last.objects.filter(o => o.type === 'creep' && o.name?.startsWith('worker-')).length >= 4);
     }
     if (claimProbe) {
-      const claimerSightings = report.ticks.filter(t => t.objects.some(o => o.type === 'creep' && o.name?.startsWith('claimer-')));
-      check('claimer spawned for the evaluated target', claimerSightings.length > 0);
+      // 出生证据走 memory:预定者离房快,200 tick 快照点读等价掷硬币
+      // (台账同款教训:容器存量/RCL2 检查点均已改窗口/记忆证据)。
+      check('claimer spawned for the evaluated target',
+        Object.keys(report.ticks.at(-1).memory.creeps ?? {}).some(n => n.startsWith('claimer-')));
       // 快照只含母房对象;跨房证据走 memory:预定者必须身在 W0N2 才能
       // 重观测并下预定,reserver 记录同时覆盖"进房"与"预定成功"。
       const claimIntel = report.ticks.at(-1).memory.intel?.rooms ?? {};
@@ -584,6 +619,15 @@ try {
         (claimIntel.W0N2?.observedAt ?? 1) > 1);
       check('neutral controller reservation established and observed',
         claimIntel.W0N2?.controller?.reserver === 'M0' && (claimIntel.W0N2?.controller?.reservationTicks ?? 0) > 0);
+    }
+    if (pioneerProbe) {
+      check('pioneer spawned for the reserved target',
+        report.ticks.some(t => t.objects.some(o => o.type === 'creep' && o.name?.startsWith('pioneer-'))));
+      // 母房无第二个能量来源:远矿工人在母房带货即完成跨房采矿-回运闭环。
+      check('pioneer returned home carrying remote energy',
+        report.ticks.some(t => t.objects.some(o => o.type === 'creep' && o.name?.startsWith('pioneer-') && (o.store?.energy ?? 0) > 0)));
+      check('pioneer delivered remote energy into the home economy',
+        (report.ticks.at(-1).memory.intel?.pioneerDelivered ?? 0) > 0);
     }
     if (intelProbe) {
       const rooms = report.ticks.at(-1).memory.intel?.rooms ?? {};
