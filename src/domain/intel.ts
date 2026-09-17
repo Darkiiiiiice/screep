@@ -189,12 +189,17 @@ export const CLAIMER_WORKER_FLOOR = 4;
 export const CLAIMER_RESERVE_REFRESH = 2000;
 /** 预定者死亡冷却:650 的身体不许连续填坑(§1 失败有界)。 */
 export const CLAIMER_DEATH_COOLDOWN = 500;
+/** 交接提前量:现任 TTL 低于此值即孵继任者(旅行 ~150 + 孵化 ~6 + 余量),
+ *  预留不断档——线上实证:寿终->冷却->补孵->飞行链每周期留 ~650 tick 真空,
+ *  真空期 pioneer 读到"非我方预定"按规则自尽,白烧 400/具。 */
+export const CLAIMER_HANDOFF_LEAD = 200;
 
 /**
  * 预定者孵化决策(§3.9 CLAIM/RESERVE,纯):只在四重盈余下派出——
  * 容量/全额能量/工人地板/无工人在途补员——且目标须为评估榜首、
- * 情报新鲜、非我方有效预定(低于刷新线才补)、当前无在飞预定者、
- * 死亡冷却已过。返回目标房名或 null。
+ * 情报新鲜、非我方有效预定(低于刷新线才补)、死亡冷却已过。
+ * 在飞预定者挡孵化,但其 TTL 低于交接提前量时放行继任者(无缝交接,
+ * 预留真空会让远矿工人按规则自尽)。返回目标房名或 null。
  */
 export function claimerSpawnNeed(args: {
   intel: IntelMemory;
@@ -202,11 +207,13 @@ export function claimerSpawnNeed(args: {
   capacity: number;
   energyAvailable: number;
   claimerAlive: boolean;
+  claimerTtl?: number | undefined;
   me: string;
   now: number;
 }): string | null {
   if (args.capacity < CLAIMER_BODY_COST || args.energyAvailable < CLAIMER_BODY_COST) return null;
-  if (args.workers < CLAIMER_WORKER_FLOOR || args.claimerAlive) return null;
+  if (args.workers < CLAIMER_WORKER_FLOOR) return null;
+  if (args.claimerAlive && (args.claimerTtl ?? Infinity) >= CLAIMER_HANDOFF_LEAD) return null;
   if (args.intel.lastClaimerDeathAt !== undefined && args.now - args.intel.lastClaimerDeathAt < CLAIMER_DEATH_COOLDOWN) return null;
   const target = args.intel.evaluation?.targets[0]?.name;
   if (!target) return null;

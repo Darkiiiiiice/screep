@@ -194,8 +194,11 @@ export function runBootstrap(): void {
           if (need) idle.spawnCreep([WORK, WORK, WORK, WORK, WORK, CARRY, MOVE], `miner-${room.name}-${Game.time}`, { memory: { role: 'miner', minerSource: need } });
           else {
             // 预定者:矿工需求落空后才轮到的第二顺位盈余支出(§3.9 CLAIM/RESERVE)。
+            // 交接 TTL 取全体在飞预定者的最大值:继任者在孵后旧者的低 TTL
+            // 不再触发重复孵化(否则每个 tick 都补一具 650)。
+            const claimerTtls = Object.values(Game.creeps).filter(c => c.memory.role === 'claimer').map(c => c.ticksToLive ?? 0);
             const claimTarget = claimerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
-              energyAvailable: room.energyAvailable, claimerAlive: Object.values(Game.creeps).some(c => c.memory.role === 'claimer'),
+              energyAvailable: room.energyAvailable, claimerAlive: claimerTtls.length > 0, claimerTtl: claimerTtls.length ? Math.max(...claimerTtls) : undefined,
               me: idle.owner.username, now: Game.time });
             if (claimTarget) idle.spawnCreep([CLAIM, MOVE], `claimer-${room.name}-${Game.time}`, { memory: { role: 'claimer', claimTarget } });
             else {

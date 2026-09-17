@@ -165,6 +165,10 @@ it('spawns a claimer only on full surplus against the top evaluated target needi
   expect(claimerSpawnNeed({ ...base, energyAvailable: 649 })).toBeNull();
   expect(claimerSpawnNeed({ ...base, workers: 3 })).toBeNull();
   expect(claimerSpawnNeed({ ...base, claimerAlive: true })).toBeNull();
+  // 无缝交接:现任 TTL 低于提前量时放行继任者(线上实证:预留真空期
+  // pioneer 按规则自尽);TTL 健康时仍挡;未传 TTL 视为健康(上行已覆盖)。
+  expect(claimerSpawnNeed({ ...base, claimerAlive: true, claimerTtl: 150 })).toBe('W0N2');
+  expect(claimerSpawnNeed({ ...base, claimerAlive: true, claimerTtl: 200 })).toBeNull();
   const noEval = intel();
   delete noEval.evaluation;
   expect(claimerSpawnNeed({ ...base, intel: noEval })).toBeNull();
