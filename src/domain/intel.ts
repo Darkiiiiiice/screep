@@ -31,6 +31,10 @@ export interface IntelMemory {
   missions?: Record<string, ScoutMission>;
  /** 最近一次 scout 死亡(含退役)的 tick,用于复活冷却。 */
  lastScoutDeathAt?: number;
+ /** 最近一次预定者死亡的 tick,用于死亡冷却。 */
+ lastClaimerDeathAt?: number;
+ /** 在飞预定者名(失踪判定用)。 */
+ claimerActive?: string;
  /** 远矿目标评分快照(EVALUATE 产出,EVAL_TOP 条)。 */
  evaluation?: { tick: number; targets: { name: string; score: number; sources: number; distance: number }[] };
  /** home→各房跳数缓存(路由静态,不随时间失效)。 */
@@ -164,4 +168,40 @@ export function evaluateRemoteTargets(args: { rooms: Record<string, RoomIntel>; 
     candidates.push({ name, score: intel.sources.length * 100 - distance * 10, sources: intel.sources.length, distance });
   }
   return candidates.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).slice(0, EVAL_TOP);
+}
+
+/** 预定者身体 [CLAIM, MOVE] 造价。 */
+export const CLAIMER_BODY_COST = 650;
+/** 预定者也是满员工人口粮外的盈余:与矿工同地板。 */
+export const CLAIMER_WORKER_FLOOR = 4;
+/** 我方预定低于该余量即补刷(上限 5000,留足回程与波动)。 */
+export const CLAIMER_RESERVE_REFRESH = 2000;
+/** 预定者死亡冷却:650 的身体不许连续填坑(§1 失败有界)。 */
+export const CLAIMER_DEATH_COOLDOWN = 500;
+
+/**
+ * 预定者孵化决策(§3.9 CLAIM/RESERVE,纯):只在四重盈余下派出——
+ * 容量/全额能量/工人地板/无工人在途补员——且目标须为评估榜首、
+ * 情报新鲜、非我方有效预定(低于刷新线才补)、当前无在飞预定者、
+ * 死亡冷却已过。返回目标房名或 null。
+ */
+export function claimerSpawnNeed(args: {
+  intel: IntelMemory;
+  workers: number;
+  capacity: number;
+  energyAvailable: number;
+  claimerAlive: boolean;
+  me: string;
+  now: number;
+}): string | null {
+  if (args.capacity < CLAIMER_BODY_COST || args.energyAvailable < CLAIMER_BODY_COST) return null;
+  if (args.workers < CLAIMER_WORKER_FLOOR || args.claimerAlive) return null;
+  if (args.intel.lastClaimerDeathAt !== undefined && args.now - args.intel.lastClaimerDeathAt < CLAIMER_DEATH_COOLDOWN) return null;
+  const target = args.intel.evaluation?.targets[0]?.name;
+  if (!target) return null;
+  const room = args.intel.rooms[target];
+  if (!room || isStale(room, args.now)) return null;
+  const controller = room.controller;
+  if (controller?.reserver === args.me && (controller.reservationTicks ?? 0) >= CLAIMER_RESERVE_REFRESH) return null;
+  return target;
 }

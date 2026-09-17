@@ -16,6 +16,7 @@ import {
   INTEL_CAP,
   evaluateRemoteTargets,
   isReachable,
+  isStale,
   markUnreachable,
   nextScoutTarget,
   observe,
@@ -36,6 +37,8 @@ declare global {
     lastY?: number;
     lastRoom?: string;
     stuck?: number;
+    /** 预定者目标房名(§3.9 CLAIM/RESERVE)。 */
+    claimTarget?: string;
   }
 }
 
@@ -187,4 +190,50 @@ export function runEvaluation(home: string): void {
     if (route !== ERR_NO_PATH) distances[name] = route.length;
   }
   intel.evaluation = { tick: Game.time, targets: evaluateRemoteTargets({ rooms: intel.rooms, distances, now: Game.time }) };
+}
+
+/**
+ * 每 tick 驱动预定者(与 scout 同为全局单位):目标失效(威胁/被他人预定/
+ * 情报过期)即退役触发冷却;在目标房内顺手重观测,保持评估情报常新——
+ * 否则情报过期会让已预定房间掉出评估,预定断档。
+ */
+export function driveClaimers(allies: readonly string[], cpuLimit: number): void {
+  const intel = intelState();
+  const alive = new Set<string>();
+  for (const creep of Object.values(Game.creeps)) {
+    const mem = creep.memory;
+    if (mem.role !== 'claimer' || creep.spawning) continue;
+    if (Game.cpu.getUsed() >= cpuLimit) break;
+    alive.add(creep.name);
+    const target = mem.claimTarget;
+    const room = target ? intel.rooms[target] : undefined;
+    const invalid = !target || !room || isStale(room, Game.time)
+      || room.threat.hostiles > 0
+      || (room.controller?.reserver !== undefined && room.controller.reserver !== creep.owner.username);
+    if (invalid) {
+      creep.suicide();
+      continue;
+    }
+    if (creep.room.name !== target) {
+      try {
+        // 与 scout 同式:range 22 跨房导航 + reusePath;寻路抛错按不可达退役。
+        creep.moveTo(new RoomPosition(25, 25, target), { range: 22, reusePath: 20 });
+      } catch {
+        markUnreachable(intel, target, Game.time);
+        creep.suicide();
+      }
+      continue;
+    }
+    intel.rooms[target] = observeRoom(creep.room, allies);
+    const controller = creep.room.controller;
+    if (!controller) continue;
+    if (creep.pos.isNearTo(controller)) creep.reserveController(controller);
+    else creep.moveTo(controller);
+  }
+  if (intel.claimerActive && !alive.has(intel.claimerActive) && !Object.values(Game.creeps).some(c => c.name === intel.claimerActive)) {
+    intel.lastClaimerDeathAt = Game.time;
+    delete intel.claimerActive;
+  }
+  const active = Object.values(Game.creeps).find(c => c.memory.role === 'claimer');
+  if (active) intel.claimerActive = active.name;
 }

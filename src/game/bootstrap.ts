@@ -1,9 +1,10 @@
 import { energyBudget, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
 import { validatePolicy, type Capabilities } from '../domain/config';
+import { claimerSpawnNeed } from '../domain/intel';
 import { runLogistics, runMiners } from './logistics';
 import { runDefense } from './defense';
 import { flushTraffic, requestMove } from './traffic';
-import { runEvaluation, driveScouts, maybeSpawnScout } from './intel';
+import { driveClaimers, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
 
 interface WorkerState {
   phase: 'collect' | 'deliver';
@@ -191,6 +192,13 @@ export function runBootstrap(): void {
             workerCount: creeps.length, workerSpawnPending: spawnWaiting,
             sources: sources.map(s => ({ id: s.id, hasContainer: containers.some(c => c.pos.isNearTo(s)), minerAlive: miners.some(m => m.memory.minerSource === s.id) })) });
           if (need) idle.spawnCreep([WORK, WORK, WORK, WORK, WORK, CARRY, MOVE], `miner-${room.name}-${Game.time}`, { memory: { role: 'miner', minerSource: need } });
+          else {
+            // 预定者:矿工需求落空后才轮到的第二顺位盈余支出(§3.9 CLAIM/RESERVE)。
+            const claimTarget = claimerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
+              energyAvailable: room.energyAvailable, claimerAlive: Object.values(Game.creeps).some(c => c.memory.role === 'claimer'),
+              me: idle.owner.username, now: Game.time });
+            if (claimTarget) idle.spawnCreep([CLAIM, MOVE], `claimer-${room.name}-${Game.time}`, { memory: { role: 'claimer', claimTarget } });
+          }
         }
       }
       const cursor = state.workerCursors![room.name] ?? 0;
@@ -211,6 +219,7 @@ export function runBootstrap(): void {
     });
   }
   isolate(state, 'intel', () => driveScouts(policy.policy.allies, executionLimit));
+  isolate(state, 'claim', () => driveClaimers(policy.policy.allies, executionLimit));
   state.rooms = { ...state.rooms, ...activeRooms };
   for (const name of Object.keys(state.rooms)) {
     if (Game.rooms[name] && !Game.rooms[name]!.controller?.my) {

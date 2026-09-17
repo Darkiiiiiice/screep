@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { intelState } from '../../src/game/intel';
 import {
   INTEL_CAP,
+  claimerSpawnNeed,
   evaluateRemoteTargets,
   INTEL_STALE,
   UNREACHABLE_TTL,
@@ -135,4 +136,28 @@ it('ranks fresh unowned source rooms by sources then distance, excluding untrust
 it('returns an empty board when no room qualifies', () => {
   const rooms: Record<string, RoomIntel> = { hostile: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0 } } };
   expect(evaluateRemoteTargets({ rooms, distances: { hostile: 1 }, now: 1200 })).toEqual([]);
+});
+
+it('spawns a claimer only on full surplus against the top evaluated target needing reservation', () => {
+  const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
+    schema: 1,
+    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0 } } },
+    evaluation: { tick: 1000, targets: [{ name: 'W0N2', score: 180, sources: 2, distance: 1 }] },
+    ...over,
+  });
+  const base = { intel: intel(), workers: 6, capacity: 800, energyAvailable: 650, claimerAlive: false, me: 'me', now: 1200 };
+  expect(claimerSpawnNeed(base)).toBe('W0N2');
+  expect(claimerSpawnNeed({ ...base, capacity: 649 })).toBeNull();
+  expect(claimerSpawnNeed({ ...base, energyAvailable: 649 })).toBeNull();
+  expect(claimerSpawnNeed({ ...base, workers: 3 })).toBeNull();
+  expect(claimerSpawnNeed({ ...base, claimerAlive: true })).toBeNull();
+  const noEval = intel();
+  delete noEval.evaluation;
+  expect(claimerSpawnNeed({ ...base, intel: noEval })).toBeNull();
+  expect(claimerSpawnNeed({ ...base, intel: intel({ lastClaimerDeathAt: 900 }) })).toBeNull();
+  const reserved = intel();
+  reserved.rooms.W0N2!.controller = { level: 0, reserver: 'me', reservationTicks: 4900 };
+  expect(claimerSpawnNeed({ ...base, intel: reserved })).toBeNull();
+  reserved.rooms.W0N2!.controller = { level: 0, reserver: 'me', reservationTicks: 1000 };
+  expect(claimerSpawnNeed({ ...base, intel: reserved })).toBe('W0N2');
 });
