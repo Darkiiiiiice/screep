@@ -452,6 +452,27 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     if (creep.withdraw(source, RESOURCE_ENERGY, shipment.amount) === ERR_NOT_IN_RANGE) travel(creep, source.pos, 1);
     handled.add(creep.name);
   }
+  // Surplus upgrade: the controller is the economy's sink of last resort. When
+  // every spawn/extension/tower/storage sink is satisfied the board places no
+  // shipment, and without this duty workers idle beside full spawns while the
+  // containers cap out and the miners stall — the whole surplus dies in the
+  // buffers instead of becoming RCL progress. Real sinks reclaim workers next
+  // tick through the delivery loop, so upgrade always yields to demand.
+  if (controller && (room.controller?.ticksToDowngrade ?? Infinity) >= 3000) {
+    for (const creep of eligible) {
+      if (handled.has(creep.name)) continue;
+      if (creep.store.energy > 0) {
+        if (creep.upgradeController(controller) === ERR_NOT_IN_RANGE) travel(creep, controller.pos, 3);
+      } else {
+        // Refuel from the logistics network, same as builders: containers are
+        // the buffer, self-harvesting would compete with the capped miners.
+        const stock = creep.pos.findClosestByRange(stockpiles.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
+        if (!stock) continue;
+        if (creep.withdraw(stock, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) travel(creep, stock.pos, 1);
+      }
+      handled.add(creep.name);
+    }
+  }
   return handled;
 }
 
