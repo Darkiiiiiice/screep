@@ -38,6 +38,14 @@
 
 - `unsupported intel schema undefined`:部署首 tick 读 Memory.intel 未播种的一次性记录,下一 tick 自愈;两组共 4 条,其后 2000+ tick 零新增。
 
+## 盈余升级修复(2026-09-17,tick 83038050 部署,sha `8613b9cf8d78`)
+
+用户客户端目击"没人升级、工人乱跑"→ 数据坐实:容器 2000 满仓死锁、矿工停工、RCL4 进度 0.018/tick。根因:`runLogistics` 收货清单不含控制器,盈余无出口(防饿死护卫是唯一升级者)。
+
+修复:收货口全满足后,无处可去的工人一律升级控制器(容器为油库,送货循环天然让位)。
+
+**线上验证**(部署后 ~290 tick):进度 0.018/tick -> **3.5/tick**(+60/17 tick);降级计时 6000 徘徊 -> 7338 回升;5/6 工人围坐控制器 (33,40) 升级、1 人容器补给;容器死锁解除,矿工复工。traffic.stuck 标记为驻车升级的正常姿态(与驻矿同理),非故障。RCL4 ETA 由"事实上永远"变为 ~3.7 万 tick。
+
 ## 监控
 
-- `node scripts/live-monitor.mjs artifacts/live/baseline-1789639144057`,窗口制滚动重启。
+- `node scripts/live-monitor.mjs artifacts/live/baseline-1789645458537`(盈余升级修复部署基线),窗口制滚动重启。
