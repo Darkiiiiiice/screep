@@ -54,3 +54,9 @@
 - 修复:`runBootstrap` 每 25 tick 顺带清扫 `Memory.creeps`(孵化中 creep 安全:`Game.creeps` 自 spawnCreep 起可见)。
 - 线上证据:部署后 130 秒 `Memory.creeps` 257 → 6,幽灵归零;bundle sha `ec1f2981c9a6`;rollback 物料 `baseline-1789470816939`。
 - ~~已知 flake 备案~~ 已根治:extension 实测 ~tick 2802 建成,而检查点设在 2799,3-tick 临界竞争导致跨代码状态偶红;检查点后移至 2899(阶段注入 3000 前留 100 tick 真实余量),连跑 3 次全绿。
+
+## 检查再校准:容器存量时间窗判定(2026-09-17)
+
+- 背景:M4 SCOUT 切片开发期 `test:intel` 报 "both source containers receive harvested energy" 红;同一代码行为两次运行末帧容器 A 存量 2 vs 0。
+- 取证:快照序列显示供应容器 A 全程被搬运链抽空(702→1402 钉在 ~2),末帧点读等价掷硬币;断言语义是"两源容器都有交付",与瞬时值无关——判定失准成立。
+- 修法:后半程任一时间窗快照各源容器曾有能量即过(更严:覆盖全程交付,不依赖单帧运气);记录于 scenario-worker.mjs 注释。

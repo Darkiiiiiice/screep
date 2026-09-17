@@ -3,6 +3,7 @@ import { validatePolicy, type Capabilities } from '../domain/config';
 import { runLogistics } from './logistics';
 import { runDefense } from './defense';
 import { flushTraffic, requestMove } from './traffic';
+import { driveScouts, maybeSpawnScout } from './intel';
 
 interface WorkerState {
   phase: 'collect' | 'deliver';
@@ -179,6 +180,7 @@ export function runBootstrap(): void {
       }
       const cursor = state.workerCursors![room.name] ?? 0;
       const spawnWaiting = spawns.length > 0 && plan.reserve > 0 && !plan.spawn && room.energyAvailable < plan.cost && spawns.some(s => !s.spawning);
+      isolate(state, 'intel-spawn', () => maybeSpawnScout(room, spawns, plan.spawn || spawnWaiting));
       const handled = Memory.logisticsEnabled === true && !state.degraded ? runLogistics(room, creeps, sources, { spawnWaiting }) : new Set<string>();
       creeps.sort((a, b) => a.name.localeCompare(b.name));
       for (let j = 0; j < creeps.length; j++) {
@@ -192,6 +194,7 @@ export function runBootstrap(): void {
       if (Memory.logisticsEnabled === true) flushTraffic(room);
     });
   }
+  isolate(state, 'intel', () => driveScouts(policy.policy.allies, executionLimit));
   state.rooms = { ...state.rooms, ...activeRooms };
   for (const name of Object.keys(state.rooms)) {
     if (Game.rooms[name] && !Game.rooms[name]!.controller?.my) {

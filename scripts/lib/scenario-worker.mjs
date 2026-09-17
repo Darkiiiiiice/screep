@@ -26,6 +26,7 @@ const multiRoom = args.includes('--multi-room');
 const maintenanceProbe = args.includes('--maintenance-probe');
 const defenseProbe = args.includes('--defense-probe');
 const progressionProbe = args.includes('--progression-probe');
+const intelProbe = args.includes('--intel-probe');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -34,7 +35,8 @@ assert(!multiRoom || lifecycle && logistics && fairnessProbe, '--multi-room requ
 assert(!maintenanceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--maintenance-probe requires --lifecycle --logistics');
 assert(!defenseProbe || lifecycle && logistics && !construction && !fairnessProbe, '--defense-probe requires --lifecycle --logistics');
 assert(!progressionProbe || lifecycle && logistics && !construction && !fairnessProbe, '--progression-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : recovery || logistics ? 600 : 3100) : 6;
+assert(!intelProbe || lifecycle && logistics && !construction && !fairnessProbe && !multiRoom, '--intel-probe requires --lifecycle --logistics');
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -45,7 +47,7 @@ const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
     logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -238,6 +240,21 @@ try {
     await server.world.addRoomObject(roomB, 'spawn', 25, 25, { user: bot.id, name: 'Spawn2', store: { energy: 300 }, storeCapacityResource: { energy: 300 }, hits: 5000, hitsMax: 5000, spawning: null, notifyWhenAttacked: true });
     report.multiRoom = { room: roomB, controller: [10, 12], sources: fixture.sources, spawn: [25, 25] };
   }
+  if (intelProbe) {
+    // 中立邻房:无归属控制器 + 双 source,专供 scout 跨房观测。
+    // 必须铺满 3×3 邻域:mock 引擎只给已注册房间加载寻路地形,
+    // 洪泛边界踏入未注册房间会让 native pathfinder 抛错(线上官方服无此问题)。
+    const ring = ['W1N1', 'W1N0', 'W1N2', 'W0N0', 'W0N2', 'E0N1', 'E0N0', 'E0N2'];
+    for (const name of ring) {
+      await server.world.addRoom(name);
+      await server.world.setTerrain(name, new TerrainMatrix());
+    }
+    await server.world.addRoomObject('W0N2', 'controller', 10, 12, { level: 0 });
+    for (const [x, y] of fixture.sources) {
+      await server.world.addRoomObject('W0N2', 'source', x, y, { energy: 3000, energyCapacity: 3000, nextRegenerationTime: 301 });
+    }
+    report.intelProbe = { room: 'W0N2', sources: fixture.sources };
+  }
   await server.start();
   let births = 0, delivered = 0, emptyRun = 0, maxEmptyRun = 0;
   let lastControllerProgress = 0, controllerIdle = 0, maxControllerIdle = 0;
@@ -316,7 +333,7 @@ try {
       await db['rooms.objects'].update({ type: 'constructionSite', x: 15, y: 16 }, { $set: { structureType: 'road' } });
     }
     await server.tick();
-    const snapshot = { time: await server.world.gameTime, objects: await server.world.roomObjects(fixture.room), memory: JSON.parse(await bot.memory || '{}'), ...(multiRoom ? { roomB: await server.world.roomObjects('W0N2') } : {}) };
+    const snapshot = { time: await server.world.gameTime, objects: await server.world.roomObjects(fixture.room), memory: JSON.parse(await bot.memory || '{}'), ...(multiRoom || intelProbe ? { roomB: await server.world.roomObjects('W0N2') } : {}) };
     // RCL2 checkpoint sits 100 ticks before the stage bump: observed completion
     // lands ~tick 2802, so the old 2799 checkpoint was a 3-tick razor race that
     // flaked red on healthy runs (ledger 2026-09-15).
@@ -358,6 +375,11 @@ try {
       if (worker && !worker.shipment && worker.logisticsRecovery?.reason === 'dependency-timeout') report.economy.released = true;
     }
     if (cpuStress && snapshot.memory.bootstrap?.degraded) (report.stress ??= { degradedSeen: false }).degradedSeen = true;
+    if (intelProbe) {
+      report.intel ??= {};
+      if (report.intel.scoutSpawned === undefined && snapshot.objects.some(o => o.type === 'creep' && o.user === bot.id && o.name?.startsWith('scout-'))) report.intel.scoutSpawned = i;
+      if (report.intel.entered === undefined && (snapshot.roomB ?? []).some(o => o.type === 'creep' && o.user === bot.id)) report.intel.entered = i;
+    }
     if (persistentFailure && i >= 452) {
       const name = report.persistentFault.name;
       const state = snapshot.memory.creeps[name];
@@ -476,6 +498,14 @@ try {
       check('tower heal lifts the wounded worker', series('creep', 'Wounded').some(h => h > report.defense.woundedHits));
       check('no friendly fire from the tower', Math.min(...series('creep', 'Wounded')) >= report.defense.woundedHits);
     }
+    if (intelProbe) {
+      const rooms = report.ticks.at(-1).memory.intel?.rooms ?? {};
+      check('scout spawned for neighbor recon', report.intel?.scoutSpawned !== undefined);
+      check('scout entered the neutral neighbor room', report.intel?.entered !== undefined);
+      check('neutral room intel records both sources with an observation tick',
+        rooms.W0N2?.sources?.length === 2 && typeof rooms.W0N2.observedAt === 'number');
+      check('neutral room intel records no false ownership', rooms.W0N2?.controller?.owner === undefined && (rooms.W0N2?.threat?.hostiles ?? -1) === 0);
+    }
     report.lifecycle = { births, delivered, maxEmptyRun, maxControllerIdle };
     if (logistics) check('controller service resumes within 400 ticks with three workers', maxControllerIdle <= 400);
     check('population established or replaced', recovery || logistics ? births >= 4 : births >= 8);
@@ -484,7 +514,15 @@ try {
     // maintenance probe owns its own fixture assertions instead.
     // The progression probe drains containers into tower/storage construction;
     // container stock is asserted by the plain logistics run instead.
-    if (logistics && !maintenanceProbe && !progressionProbe) check('both source containers receive harvested energy', report.ticks.at(-1).objects.filter(o => o.type === 'container' && o.store.energy > 0).length === 2);
+    // 容器库存按时间窗判定:供应容器会被搬运链路持续抽空(oscillate 0~N),
+    // 末帧点读等价于掷硬币(台账 2026-09-17:同行为两跑 2 vs 0 能量)。改为
+    // 后半程任一快照各源容器曾有能量——对"矿工从未交付"是更严格的真实证据。
+    if (logistics && !maintenanceProbe && !progressionProbe) {
+      const late = report.ticks.slice(Math.floor(report.ticks.length / 2));
+      const containers = report.ticks.at(-1).objects.filter(o => o.type === 'container');
+      const delivered = (x, y) => late.some(t => t.objects.some(o => o.type === 'container' && o.x === x && o.y === y && (o.store?.energy ?? 0) > 0));
+      check('both source containers receive harvested energy', containers.length >= 2 && containers.every(c => delivered(c.x, c.y)));
+    }
     if (logisticsRecovery) check('actual deliveries resume after dependency recovery', report.ticks.at(-1).memory.logisticsDelivered > report.cycleInjection.deliveredBefore);
     check('production population remains present', maxEmptyRun <= 60);
     check('heartbeat completed', report.ticks.at(-1).memory.bootstrap?.heartbeat >= tickCount);

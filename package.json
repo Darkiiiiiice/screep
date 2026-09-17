@@ -35,6 +35,7 @@
     "test:logistics-failure": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --logistics-recovery --persistent-failure",
     "test:maintenance": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --maintenance-probe",
     "test:defense": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --defense-probe",
+    "test:intel": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --intel-probe",
     "select-room": "node scripts/select-room.mjs",
     "verify": "npm run typecheck && npm run lint && npm test && npm run build && npm run smoke && npm run scenario -- fresh && npm run scenario -- legacy && npm run scenario -- no-memory",
     "test:progression": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --progression-probe"

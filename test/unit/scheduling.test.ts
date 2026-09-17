@@ -26,7 +26,7 @@ it('rotates room priority under pressure and retains unseen room capability as u
   const room = (name: string) => ({ name, controller: { my: true, level: 1 }, energyCapacityAvailable: 300, energyAvailable: 0,
     find: (kind: number) => { if (kind === 105) { visited.push(name); used = 19; } return []; } });
   const memory = {} as Memory;
-  const game = { time: 1, rooms: { A: room('A'), B: room('B') }, creeps: {}, cpu: { limit: 20, tickLimit: 500, getUsed: () => used }, gcl: { level: 1 } };
+  const game = { time: 1, rooms: { A: room('A'), B: room('B') }, creeps: {}, cpu: { limit: 20, tickLimit: 500, getUsed: () => used }, gcl: { level: 1 }, map: { describeExits: () => ({}) } };
   vi.stubGlobal('Memory', memory);
   vi.stubGlobal('Game', game);
   runBootstrap();
