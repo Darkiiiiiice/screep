@@ -287,7 +287,14 @@ export function driveRemoteMining(cpuLimit: number): void {
     const home = mem.home ??= creep.room.name;
     const room = target ? intel.rooms[target] : undefined;
     const hostile = room ? room.threat.armed > 0 : false;
-    const invalid = !target || !room || isStale(room, Game.time) || room.controller?.reserver !== creep.owner.username;
+    // 退役判据:情报过期(claimer 链彻底断裂)或房间被【别人】预定/占领才退役。
+    // 预定断档(reserver=undefined)不算数:claimer 冷却+飞行的几百 tick 里预定
+    // 必然归零,若此时机组自杀,每个换班周期都白烧 1200+ 重组(线上二次实证
+    // 2026-09-18);断档期机组原地继续干,新 claimer 到岗即恢复,过期兜底仍由
+    // isStale 承担。
+    const reserver = room?.controller?.reserver;
+    const invalid = !target || !room || isStale(room, Game.time)
+      || (reserver !== undefined && reserver !== creep.owner.username);
 
     // 入侵撤离:在远遇敌立刻回母房;威胁消除(情报刷新)后自动复工。
     if (hostile && creep.room.name === target) {
