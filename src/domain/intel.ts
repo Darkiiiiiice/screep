@@ -190,10 +190,12 @@ export const CLAIMER_WORKER_FLOOR = 4;
 export const CLAIMER_RESERVE_REFRESH = 2000;
 /** 预定者死亡冷却:650 的身体不许连续填坑(§1 失败有界)。 */
 export const CLAIMER_DEATH_COOLDOWN = 500;
-/** 交接提前量:现任 TTL 低于此值即孵继任者(旅行 ~150 + 孵化 ~6 + 余量),
- *  预留不断档——线上实证:寿终->冷却->补孵->飞行链每周期留 ~650 tick 真空,
- *  真空期 pioneer 读到"非我方预定"按规则自尽,白烧 400/具。 */
-export const CLAIMER_HANDOFF_LEAD = 200;
+/** 交接提前量:现任 TTL 低于此值即孵继任者(旅行 ~150 + 孵化 ~6 + 攒 650 余量),
+ * 预留不断档——线上实证:寿终->冷却->补孵->飞行链每周期留 ~650 tick 真空,
+ * 真空期远矿工人读到"非我方预定"按规则自尽,白烧 400/具。
+ * 2026-09-18 二次实证:机组 TTL 同为 1500,换班挤兑期矿工重孵(550)先把能量
+ * 抽干,200 窗口攒不齐 650 仍断档;翻倍到 400 让攒钱先于挤兑开始。 */
+export const CLAIMER_HANDOFF_LEAD = 400;
 
 /**
  * 预定者孵化决策(§3.9 CLAIM/RESERVE,纯):只在四重盈余下派出——
