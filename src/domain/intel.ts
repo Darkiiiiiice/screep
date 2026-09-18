@@ -35,12 +35,13 @@ export interface IntelMemory {
  lastClaimerDeathAt?: number;
  /** 在飞预定者名(失踪判定用)。 */
  claimerActive?: string;
- /** 最近一次远矿工人死亡的 tick,用于死亡冷却。 */
- lastPioneerDeathAt?: number;
- /** 在飞远矿工人名(失踪判定用)。 */
- pioneerActive?: string;
- /** 远矿工人累计送回家的能量(净收益核算,§3.9 验收)。 */
- pioneerDelivered?: number;
+ /** 最近一次远程矿工/搬运工死亡的 tick,用于各自的死亡冷却。 */
+ lastRemoteMinerDeathAt?: number;
+ lastRemoteHaulerDeathAt?: number;
+ /** 远程机组存活快照(矿工/搬运工各自计数),驱动循环据此判定死亡。 */
+ remoteCrew?: { miners: number; haulers: number };
+ /** 远程机组累计送回家的能量(净收益核算,§3.9 验收;前身 pioneerDelivered 见台账)。 */
+ remoteDelivered?: number;
  /** 远矿目标评分快照(EVALUATE 产出,EVAL_TOP 条)。 */
  evaluation?: { tick: number; targets: { name: string; score: number; sources: number; distance: number }[] };
  /** home→各房跳数缓存(路由静态,不随时间失效)。 */
@@ -224,34 +225,64 @@ export function claimerSpawnNeed(args: {
   return target;
 }
 
-/** 远矿工人身体 [WORK×2, CARRY×2, MOVE×2] 造价:采满自运回母房。 */
-export const PIONEER_BODY_COST = 400;
-/** 与矿工/预定者同地板:远矿是满员工人口粮外的第三顺位盈余。 */
-export const PIONEER_WORKER_FLOOR = 4;
-/** 远矿工人死亡冷却(§1 失败有界)。 */
-export const PIONEER_DEATH_COOLDOWN = 300;
+/** 远程矿工身体 [WORK×5, CARRY, MOVE] 造价:蹲源开采,采满即脚下掉落。 */
+export const REMOTE_MINER_BODY_COST = 550;
+/** 远程搬运工身体 [CARRY×4, MOVE×4] 造价:平原全速(1:1),远房↔母房穿梭。 */
+export const REMOTE_HAULER_BODY_COST = 400;
+/** 每名远程矿工配属的搬运工数(v1 预算:矿工 5/tick,搬运 ~0.95/tick/只,堆不下的
+ *  盈余在源旁积压不掉耐久,后续容量上来再补运力)。 */
+export const REMOTE_HAULERS_PER_MINER = 3;
+/** 与矿工/预定者同地板:远矿是满员工人口粮外的盈余。 */
+export const REMOTE_WORKER_FLOOR = 4;
+/** 远程机组死亡冷却(§1 失败有界),矿工与搬运工各自独立计。 */
+export const REMOTE_DEATH_COOLDOWN = 300;
+
+/** 远程机组目标校验(纯):榜首、新鲜、我方已预定(CLAIM 先行,不许跳步)。 */
+function remoteTarget(args: { intel: IntelMemory; me: string; now: number }): string | null {
+ const target = args.intel.evaluation?.targets[0]?.name;
+ if (!target) return null;
+ const room = args.intel.rooms[target];
+ if (!room || isStale(room, args.now)) return null;
+ if (room.controller?.reserver !== args.me) return null;
+ return target;
+}
 
 /**
- * 远矿工人孵化决策(§3.9 DEPLOY,纯):榜首目标须为我方已预定(CLAIM 先行,
- * 流程顺序不许跳步)、情报新鲜;四重盈余门(容量/全额/工人地板/无在飞)
- * 与死亡冷却同源。每个目标只养一名远矿工人(v1 预算控制)。
+ * 远程矿工孵化决策(§3.9 DEPLOY,纯):四重盈余门(容量/全额/工人地板/无在飞)
+ * 与死亡冷却同源。每个目标只养一名蹲坑矿工(v1 预算控制)。
  */
-export function pioneerSpawnNeed(args: {
-  intel: IntelMemory;
-  workers: number;
-  capacity: number;
-  energyAvailable: number;
-  pioneerAlive: boolean;
-  me: string;
-  now: number;
+export function remoteMinerSpawnNeed(args: {
+ intel: IntelMemory;
+ workers: number;
+ capacity: number;
+ energyAvailable: number;
+ minerAlive: boolean;
+ me: string;
+ now: number;
 }): string | null {
-  if (args.capacity < PIONEER_BODY_COST || args.energyAvailable < PIONEER_BODY_COST) return null;
-  if (args.workers < PIONEER_WORKER_FLOOR || args.pioneerAlive) return null;
-  if (args.intel.lastPioneerDeathAt !== undefined && args.now - args.intel.lastPioneerDeathAt < PIONEER_DEATH_COOLDOWN) return null;
-  const target = args.intel.evaluation?.targets[0]?.name;
-  if (!target) return null;
-  const room = args.intel.rooms[target];
-  if (!room || isStale(room, args.now) || room.sources.length === 0) return null;
-  if (room.controller?.reserver !== args.me) return null;
-  return target;
+ if (args.capacity < REMOTE_MINER_BODY_COST || args.energyAvailable < REMOTE_MINER_BODY_COST) return null;
+ if (args.workers < REMOTE_WORKER_FLOOR || args.minerAlive) return null;
+ if (args.intel.lastRemoteMinerDeathAt !== undefined && args.now - args.intel.lastRemoteMinerDeathAt < REMOTE_DEATH_COOLDOWN) return null;
+ return remoteTarget(args);
+}
+
+/**
+ * 远程搬运工孵化决策(纯):矿工在岗才配运力(无产不运),数量上限
+ * REMOTE_HAULERS_PER_MINER×在矿工数;盈余门与死亡冷却与矿工同源。
+ */
+export function remoteHaulerSpawnNeed(args: {
+ intel: IntelMemory;
+ workers: number;
+ capacity: number;
+ energyAvailable: number;
+ haulers: number;
+ miners: number;
+ me: string;
+ now: number;
+}): string | null {
+ if (args.capacity < REMOTE_HAULER_BODY_COST || args.energyAvailable < REMOTE_HAULER_BODY_COST) return null;
+ if (args.workers < REMOTE_WORKER_FLOOR) return null;
+ if (args.miners < 1 || args.haulers >= args.miners * REMOTE_HAULERS_PER_MINER) return null;
+ if (args.intel.lastRemoteHaulerDeathAt !== undefined && args.now - args.intel.lastRemoteHaulerDeathAt < REMOTE_DEATH_COOLDOWN) return null;
+ return remoteTarget(args);
 }

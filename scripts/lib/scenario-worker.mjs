@@ -29,7 +29,7 @@ const progressionProbe = args.includes('--progression-probe');
 const intelProbe = args.includes('--intel-probe');
 const minersProbe = args.includes('--miners-probe');
 const claimProbe = args.includes('--claim-probe');
-const pioneerProbe = args.includes('--pioneer-probe');
+const remoteProbe = args.includes('--remote-probe');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -41,8 +41,8 @@ assert(!progressionProbe || lifecycle && logistics && !construction && !fairness
 assert(!intelProbe || lifecycle && logistics && !construction && !fairnessProbe && !multiRoom, '--intel-probe requires --lifecycle --logistics');
 assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe, '--miners-probe requires --lifecycle --logistics');
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
-assert(!pioneerProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--pioneer-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : pioneerProbe ? 1000 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+assert(!remoteProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--remote-probe requires --lifecycle --logistics');
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -278,9 +278,9 @@ try {
     await env.set(env.keys.MEMORY + bot.id, JSON.stringify({ logisticsEnabled: true, intel: { schema: 1, rooms: { W0N2: { observedAt: 1, sources: [{ id: 'seeded-1', x: 1, y: 1 }, { id: 'seeded-2', x: 2, y: 2 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0 } } }, distances: { W0N2: 1 } } }));
     report.claim = { room: 'W0N2' };
   }
-  if (pioneerProbe) {
-    // 远矿工人切片:claim 同款经济底座;W0N2 预置我方有效预定(引擎对象 +
-    // 情报双写)→ 预定者需求落空,远矿工人第一 tick 上场,跑采矿-回运闭环。
+  if (remoteProbe) {
+    // 远程机组切片:claim 同款经济底座;W0N2 预置我方有效预定(引擎对象 +
+    // 情报双写)→ 预定者需求落空,矿工+搬运工依次上场,跑蹲采-掉落-回运闭环。
     await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 3, progress: 0 } });
     for (const [x, y] of [[24, 23], [26, 23], [23, 26], [27, 24], [24, 27], [22, 25], [26, 22], [23, 24]]) {
       await server.world.addRoomObject(fixture.room, 'extension', x, y, { user: bot.id, store: { energy: 50 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
@@ -306,8 +306,9 @@ try {
     for (const [x, y] of fixture.sources) {
       await server.world.addRoomObject('W0N2', 'source', x, y, { energy: 3000, energyCapacity: 3000, nextRegenerationTime: 301 });
     }
-    await env.set(env.keys.MEMORY + bot.id, JSON.stringify({ logisticsEnabled: true, intel: { schema: 1, rooms: { W0N2: { observedAt: 1, sources: [{ id: 'seeded-1', x: 1, y: 1 }, { id: 'seeded-2', x: 2, y: 2 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'M0', reservationTicks: 4000 } } }, distances: { W0N2: 1 } } }));
-    report.pioneer = { room: 'W0N2' };
+    // 情报里的源坐标写真实坐标:矿工按 sources[0] 直奔源点。
+    await env.set(env.keys.MEMORY + bot.id, JSON.stringify({ logisticsEnabled: true, intel: { schema: 1, rooms: { W0N2: { observedAt: 1, sources: fixture.sources.map(([x, y], i) => ({ id: `seeded-${i}`, x, y })), threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'M0', reservationTicks: 4000 } } }, distances: { W0N2: 1 } } }));
+    report.remote = { room: 'W0N2' };
   }
   if (fairnessProbe) {
     await server.world.addRoomObject(fixture.room, 'extension', 26, 25, { user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
@@ -426,7 +427,14 @@ try {
       if (i === 4299) {
         check('RCL3 stage: tower is placed and under construction', objects.some(o => o.type === 'tower') || objects.some(o => o.type === 'constructionSite' && o.structureType === 'tower' && (o.progress ?? 0) > 0));
       } else {
-        check('RCL4 stage: storage is placed and under construction', objects.some(o => o.type === 'storage') || objects.some(o => o.type === 'constructionSite' && o.structureType === 'storage' && (o.progress ?? 0) > 0));
+        // storage 解锁按窗口判定(台账 2026-09-18):放置行为确定(六跑全在 4302
+        // 落点),但末帧 progress 是 mock CPU 混沌的掷硬币——同语义六跑 0~1110
+        // 漂移,含改动前旧跑;塔/扩展在窗口内持续吃建造优先级是设计行为
+        // (logistics.ts 分批施工链),storage 0 进度 ≠ 回归。回归面由本放置断言
+        // + planning.test.ts 的 RCL4 storage 单测 + 塔/扩展窗口覆盖。
+        check('RCL4 stage: storage is placed after the unlock',
+          report.ticks.some(t => t.time >= 4300 && (t.objects.some(o => o.type === 'storage')
+            || t.objects.some(o => o.type === 'constructionSite' && o.structureType === 'storage'))));
         const storageObject = objects.find(o => o.type === 'storage');
         if (storageObject) check('storage accumulates energy from the board', (storageObject.store?.energy ?? 0) > 0);
         check('progression heartbeat completed', snapshot.memory.bootstrap?.heartbeat >= tickCount);
@@ -620,14 +628,18 @@ try {
       check('neutral controller reservation established and observed',
         claimIntel.W0N2?.controller?.reserver === 'M0' && (claimIntel.W0N2?.controller?.reservationTicks ?? 0) > 0);
     }
-    if (pioneerProbe) {
-      check('pioneer spawned for the reserved target',
-        report.ticks.some(t => t.objects.some(o => o.type === 'creep' && o.name?.startsWith('pioneer-'))));
-      // 母房无第二个能量来源:远矿工人在母房带货即完成跨房采矿-回运闭环。
-      check('pioneer returned home carrying remote energy',
-        report.ticks.some(t => t.objects.some(o => o.type === 'creep' && o.name?.startsWith('pioneer-') && (o.store?.energy ?? 0) > 0)));
-      check('pioneer delivered remote energy into the home economy',
-        (report.ticks.at(-1).memory.intel?.pioneerDelivered ?? 0) > 0);
+    if (remoteProbe) {
+      const lastMem = report.ticks.at(-1).memory;
+      // 出生证据走 memory:机组跨房作业,200 tick 快照点读等价掷硬币(台账同款教训)。
+      check('remote miner spawned for the reserved target',
+        Object.keys(lastMem.creeps ?? {}).some(n => n.startsWith('rminer-')));
+      check('remote hauler spawned after the miner',
+        Object.keys(lastMem.creeps ?? {}).some(n => n.startsWith('rhauler-')));
+      // 母房无第二个能量来源:搬运工在母房带货即完成跨房采矿-回运闭环。
+      check('hauler returned home carrying remote energy',
+        report.ticks.some(t => t.objects.some(o => o.type === 'creep' && o.name?.startsWith('rhauler-') && (o.store?.energy ?? 0) > 0)));
+      check('remote crew delivered energy into the home economy',
+        (lastMem.intel?.remoteDelivered ?? 0) > 0);
     }
     if (intelProbe) {
       const rooms = report.ticks.at(-1).memory.intel?.rooms ?? {};

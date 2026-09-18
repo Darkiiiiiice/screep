@@ -1,10 +1,10 @@
 import { energyBudget, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
 import { validatePolicy, type Capabilities } from '../domain/config';
-import { claimerSpawnNeed, pioneerSpawnNeed } from '../domain/intel';
+import { claimerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { runLogistics, runMiners } from './logistics';
 import { runDefense } from './defense';
 import { flushTraffic, requestMove } from './traffic';
-import { driveClaimers, drivePioneers, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
+import { driveClaimers, driveRemoteMining, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
 
 interface WorkerState {
   phase: 'collect' | 'deliver';
@@ -202,11 +202,19 @@ export function runBootstrap(): void {
               me: idle.owner.username, now: Game.time });
             if (claimTarget) idle.spawnCreep([CLAIM, MOVE], `claimer-${room.name}-${Game.time}`, { memory: { role: 'claimer', claimTarget } });
             else {
-              // 远矿工人:预定生效后的第三顺位盈余(§3.9 DEPLOY)。
-              const pioneerTarget = pioneerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
-                energyAvailable: room.energyAvailable, pioneerAlive: Object.values(Game.creeps).some(c => c.memory.role === 'pioneer'),
-                me: idle.owner.username, now: Game.time });
-              if (pioneerTarget) idle.spawnCreep([WORK, WORK, CARRY, CARRY, MOVE, MOVE], `pioneer-${room.name}-${Game.time}`, { memory: { role: 'pioneer', pioneerTarget, home: room.name } });
+              // 远程机组:预定生效后的第三顺位盈余(§3.9 DEPLOY)——矿工先行,
+              // 在岗后按 REMOTE_HAULERS_PER_MINER 配搬运工。
+              const remoteMiners = Object.values(Game.creeps).filter(c => c.memory.role === 'remoteMiner').length;
+              const remoteHaulers = Object.values(Game.creeps).filter(c => c.memory.role === 'remoteHauler').length;
+              const rMinerTarget = remoteMinerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
+                energyAvailable: room.energyAvailable, minerAlive: remoteMiners > 0, me: idle.owner.username, now: Game.time });
+              if (rMinerTarget) {
+                idle.spawnCreep([WORK, WORK, WORK, WORK, WORK, CARRY, MOVE], `rminer-${room.name}-${Game.time}`, { memory: { role: 'remoteMiner', remoteTarget: rMinerTarget, home: room.name } });
+              } else {
+                const rHaulerTarget = remoteHaulerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
+                  energyAvailable: room.energyAvailable, haulers: remoteHaulers, miners: remoteMiners, me: idle.owner.username, now: Game.time });
+                if (rHaulerTarget) idle.spawnCreep([CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], `rhauler-${room.name}-${Game.time}`, { memory: { role: 'remoteHauler', remoteTarget: rHaulerTarget, home: room.name } });
+              }
             }
           }
         }
@@ -230,7 +238,7 @@ export function runBootstrap(): void {
   }
   isolate(state, 'intel', () => driveScouts(policy.policy.allies, executionLimit));
   isolate(state, 'claim', () => driveClaimers(policy.policy.allies, executionLimit));
-  isolate(state, 'pioneers', () => drivePioneers(executionLimit));
+  isolate(state, 'remote', () => driveRemoteMining(executionLimit));
   state.rooms = { ...state.rooms, ...activeRooms };
   for (const name of Object.keys(state.rooms)) {
     if (Game.rooms[name] && !Game.rooms[name]!.controller?.my) {

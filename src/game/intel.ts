@@ -39,8 +39,8 @@ declare global {
     stuck?: number;
     /** 预定者目标房名(§3.9 CLAIM/RESERVE)。 */
     claimTarget?: string;
-    /** 远矿工人目标房名(§3.9 DEPLOY)。 */
-    pioneerTarget?: string;
+    /** 远程机组目标房名(§3.9 DEPLOY)。 */
+    remoteTarget?: string;
   }
 }
 
@@ -244,21 +244,46 @@ export function driveClaimers(allies: readonly string[], cpuLimit: number): void
   if (active) intel.claimerActive = active.name;
 }
 
+/** 远程搬运工离家交付的最低载货量:半空就跑长途会把运力烧在路上。 */
+const REMOTE_HAUL_MIN_LOAD = 150;
+
+/** 机组送达入口:孵化/扩展优先,容器兜底;送达量计入 remoteDelivered。 */
+function deliverRemote(intel: IntelMemory, creep: Creep): void {
+  const sinks = creep.room.find(FIND_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension | StructureContainer =>
+    (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION || s.structureType === STRUCTURE_CONTAINER)
+    && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
+  const sink = creep.pos.findClosestByRange(sinks);
+  if (!sink) return;
+  if (creep.pos.isNearTo(sink)) {
+    const carried = creep.store.getUsedCapacity(RESOURCE_ENERGY);
+    if (creep.transfer(sink, RESOURCE_ENERGY) === OK) intel.remoteDelivered = (intel.remoteDelivered ?? 0) + Math.min(carried, sink.store.getFreeCapacity(RESOURCE_ENERGY));
+  } else creep.moveTo(sink);
+}
+
 /**
- * 每 tick 驱动远矿工人(全局单位,§3.9 DEPLOY):采满自运回母房的闭环。
- * 威胁情报到达即在远撤离回母房(不自杀,保命等复工);目标失效(过期/
- * 不再是我方预定)送完手上货后退役。送达量计入 pioneerDelivered,
+ * 每 tick 驱动远程机组(全局单位,§3.9 DEPLOY 的经济梯队):
+ * - 矿工:蹲目标房源点开采,采满即脚下掉落(drop-miner),永不搬运;
+ * - 搬运工:在目标房捡最大的掉落能量堆,满载回母房喂孵化/容器体系。
+ * 威胁(武装)到达即在远撤离回母房保命,情报复位自动复工;目标失效(过期/
+ * 不再是我方预定)送完手上货后退役。送达量计入 remoteDelivered,
  * 供"远矿净收益为正"的验收核算。
  */
-export function drivePioneers(cpuLimit: number): void {
+export function driveRemoteMining(cpuLimit: number): void {
   const intel = intelState();
-  const alive = new Set<string>();
-  for (const creep of Object.values(Game.creeps)) {
-    const mem = creep.memory;
-    if (mem.role !== 'pioneer' || creep.spawning) continue;
+  const crew = Object.values(Game.creeps).filter(c => c.memory.role === 'remoteMiner' || c.memory.role === 'remoteHauler');
+  // 死亡判定在行动循环外(全量计数,不吃 CPU 门):计数下降即记冷却。
+  // 同 tick 死亡+补员完成会掩盖一次——可接受,下一具死亡仍会触发(§1 失败有界)。
+  const minersAlive = crew.filter(c => c.memory.role === 'remoteMiner' && !c.spawning).length;
+  const haulersAlive = crew.filter(c => c.memory.role === 'remoteHauler' && !c.spawning).length;
+  const prev = intel.remoteCrew ?? { miners: 0, haulers: 0 };
+  if (prev.miners > minersAlive) intel.lastRemoteMinerDeathAt = Game.time;
+  if (prev.haulers > haulersAlive) intel.lastRemoteHaulerDeathAt = Game.time;
+  intel.remoteCrew = { miners: minersAlive, haulers: haulersAlive };
+  for (const creep of crew) {
+    if (creep.spawning) continue;
     if (Game.cpu.getUsed() >= cpuLimit) break;
-    alive.add(creep.name);
-    const target = mem.pioneerTarget;
+    const mem = creep.memory;
+    const target = mem.remoteTarget;
     const home = mem.home ??= creep.room.name;
     const room = target ? intel.rooms[target] : undefined;
     const hostile = room ? room.threat.armed > 0 : false;
@@ -279,10 +304,13 @@ export function drivePioneers(cpuLimit: number): void {
       continue;
     }
 
-    if (creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+    if (mem.role === 'remoteMiner') {
       if (creep.room.name !== target) {
+        // 直奔情报里记下的源点;寻路抛错 = 目标不可达,黑名单并退役。
+        const src = room.sources[0];
+        if (!src) { creep.suicide(); continue; }
         try {
-          creep.moveTo(new RoomPosition(25, 25, target), { range: 22, reusePath: 20 });
+          creep.moveTo(new RoomPosition(src.x, src.y, target), { range: 1, reusePath: 20 });
         } catch {
           markUnreachable(intel, target, Game.time);
           creep.suicide();
@@ -291,28 +319,44 @@ export function drivePioneers(cpuLimit: number): void {
       }
       const source = creep.pos.findClosestByRange(FIND_SOURCES_ACTIVE);
       if (!source) continue;
-      if (creep.pos.isNearTo(source)) creep.harvest(source);
-      else creep.moveTo(source);
-    } else {
-      if (creep.room.name !== home) {
-        creep.moveTo(new RoomPosition(25, 25, home), { range: 22, reusePath: 20 });
-        continue;
+      if (creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+        if (creep.pos.isNearTo(source)) creep.harvest(source);
+        else creep.moveTo(source);
+      } else {
+        creep.drop(RESOURCE_ENERGY);
       }
-      const sinks = creep.room.find(FIND_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension | StructureContainer =>
-        (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION || s.structureType === STRUCTURE_CONTAINER)
-        && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
-      const sink = creep.pos.findClosestByRange(sinks);
-      if (!sink) continue;
-      if (creep.pos.isNearTo(sink)) {
-        const carried = creep.store.getUsedCapacity(RESOURCE_ENERGY);
-        if (creep.transfer(sink, RESOURCE_ENERGY) === OK) intel.pioneerDelivered = (intel.pioneerDelivered ?? 0) + Math.min(carried, sink.store.getFreeCapacity(RESOURCE_ENERGY));
-      } else creep.moveTo(sink);
+      continue;
     }
+
+    // 搬运工:满载即回母房交付;在目标房捡最大掉落堆,堆空且够起运线就返程,
+    // 空手则守源旁等矿工产出。
+    if (creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+      if (creep.room.name !== home) creep.moveTo(new RoomPosition(25, 25, home), { range: 22, reusePath: 20 });
+      else deliverRemote(intel, creep);
+      continue;
+    }
+    if (creep.room.name !== target) {
+      if (creep.store.getUsedCapacity(RESOURCE_ENERGY) >= REMOTE_HAUL_MIN_LOAD && creep.room.name === home) { deliverRemote(intel, creep); continue; }
+      try {
+        creep.moveTo(new RoomPosition(25, 25, target), { range: 22, reusePath: 20 });
+      } catch {
+        markUnreachable(intel, target, Game.time);
+        if (creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) creep.suicide();
+      }
+      continue;
+    }
+    const piles = creep.room.find(FIND_DROPPED_RESOURCES).filter(r => r.resourceType === RESOURCE_ENERGY && r.amount > 0);
+    if (piles.length) {
+      const pile = piles.sort((a, b) => b.amount - a.amount)[0]!;
+      if (creep.pos.isNearTo(pile)) creep.pickup(pile);
+      else creep.moveTo(pile);
+      continue;
+    }
+    if (creep.store.getUsedCapacity(RESOURCE_ENERGY) >= REMOTE_HAUL_MIN_LOAD) {
+      creep.moveTo(new RoomPosition(25, 25, home), { range: 22, reusePath: 20 });
+      continue;
+    }
+    const src = room.sources[0];
+    if (src) creep.moveTo(new RoomPosition(src.x, src.y, target), { range: 2, reusePath: 20 });
   }
-  if (intel.pioneerActive && !alive.has(intel.pioneerActive) && !Object.values(Game.creeps).some(c => c.name === intel.pioneerActive)) {
-    intel.lastPioneerDeathAt = Game.time;
-    delete intel.pioneerActive;
-  }
-  const active = Object.values(Game.creeps).find(c => c.memory.role === 'pioneer');
-  if (active) intel.pioneerActive = active.name;
 }

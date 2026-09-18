@@ -41,7 +41,7 @@
     "test:progression": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --progression-probe",
     "test:miners": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --miners-probe",
     "test:claim": "node scripts/scenario.mjs --lifecycle --logistics --claim-probe",
-    "test:pioneer": "node scripts/scenario.mjs --lifecycle --logistics --pioneer-probe"
+    "test:remote": "node scripts/scenario.mjs --lifecycle --logistics --remote-probe"
   },
   "dependencies": {
     "screeps-api": "^2.1.0"

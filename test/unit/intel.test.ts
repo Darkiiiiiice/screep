@@ -3,7 +3,8 @@ import { intelState } from '../../src/game/intel';
 import {
   INTEL_CAP,
   claimerSpawnNeed,
-  pioneerSpawnNeed,
+  remoteHaulerSpawnNeed,
+  remoteMinerSpawnNeed,
   evaluateRemoteTargets,
   INTEL_STALE,
   UNREACHABLE_TTL,
@@ -180,27 +181,49 @@ it('spawns a claimer only on full surplus against the top evaluated target needi
   expect(claimerSpawnNeed({ ...base, intel: reserved })).toBe('W0N2');
 });
 
-it('spawns a pioneer only against a self-reserved fresh top target on full surplus', () => {
+it('spawns a remote miner only against a self-reserved fresh top target on full surplus', () => {
   const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
     schema: 1,
     rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'me', reservationTicks: 4000 } } },
     evaluation: { tick: 1000, targets: [{ name: 'W0N2', score: 180, sources: 2, distance: 1 }] },
     ...over,
   });
-  const base = { intel: intel(), workers: 6, capacity: 800, energyAvailable: 650, pioneerAlive: false, me: 'me', now: 1200 };
-  expect(pioneerSpawnNeed(base)).toBe('W0N2');
-  expect(pioneerSpawnNeed({ ...base, capacity: 399 })).toBeNull();
-  expect(pioneerSpawnNeed({ ...base, energyAvailable: 399 })).toBeNull();
-  expect(pioneerSpawnNeed({ ...base, workers: 3 })).toBeNull();
-  expect(pioneerSpawnNeed({ ...base, pioneerAlive: true })).toBeNull();
-  expect(pioneerSpawnNeed({ ...base, intel: intel({ lastPioneerDeathAt: 1100 }) })).toBeNull();
+  const base = { intel: intel(), workers: 6, capacity: 800, energyAvailable: 650, minerAlive: false, me: 'me', now: 1200 };
+  expect(remoteMinerSpawnNeed(base)).toBe('W0N2');
+  expect(remoteMinerSpawnNeed({ ...base, capacity: 549 })).toBeNull();
+  expect(remoteMinerSpawnNeed({ ...base, energyAvailable: 549 })).toBeNull();
+  expect(remoteMinerSpawnNeed({ ...base, workers: 3 })).toBeNull();
+  expect(remoteMinerSpawnNeed({ ...base, minerAlive: true })).toBeNull();
+  expect(remoteMinerSpawnNeed({ ...base, intel: intel({ lastRemoteMinerDeathAt: 1100 }) })).toBeNull();
   const unreserved = intel();
   unreserved.rooms.W0N2!.controller = { level: 0 };
-  expect(pioneerSpawnNeed({ ...base, intel: unreserved })).toBeNull();
+  expect(remoteMinerSpawnNeed({ ...base, intel: unreserved })).toBeNull();
   const foreign = intel();
   foreign.rooms.W0N2!.controller = { level: 0, reserver: 'someone', reservationTicks: 4000 };
-  expect(pioneerSpawnNeed({ ...base, intel: foreign })).toBeNull();
+  expect(remoteMinerSpawnNeed({ ...base, intel: foreign })).toBeNull();
   const stale = intel();
   stale.rooms.W0N2!.observedAt = 100;
-  expect(pioneerSpawnNeed({ ...base, intel: stale, now: 5000 })).toBeNull();
+  expect(remoteMinerSpawnNeed({ ...base, intel: stale, now: 5000 })).toBeNull();
+});
+
+it('fields haulers only while a miner is on station, capped per miner', () => {
+  const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
+    schema: 1,
+    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'me', reservationTicks: 4000 } } },
+    evaluation: { tick: 1000, targets: [{ name: 'W0N2', score: 180, sources: 2, distance: 1 }] },
+    ...over,
+  });
+  // 无产不运:矿工不在岗,搬运工不许出门。
+  const base = { intel: intel(), workers: 6, capacity: 800, energyAvailable: 650, haulers: 0, miners: 1, me: 'me', now: 1200 };
+  expect(remoteHaulerSpawnNeed(base)).toBe('W0N2');
+  expect(remoteHaulerSpawnNeed({ ...base, miners: 0 })).toBeNull();
+  expect(remoteHaulerSpawnNeed({ ...base, haulers: 3 })).toBeNull();
+  expect(remoteHaulerSpawnNeed({ ...base, haulers: 1, miners: 1 })).toBe('W0N2');
+  expect(remoteHaulerSpawnNeed({ ...base, capacity: 399 })).toBeNull();
+  expect(remoteHaulerSpawnNeed({ ...base, energyAvailable: 399 })).toBeNull();
+  expect(remoteHaulerSpawnNeed({ ...base, workers: 3 })).toBeNull();
+  expect(remoteHaulerSpawnNeed({ ...base, intel: intel({ lastRemoteHaulerDeathAt: 1100 }) })).toBeNull();
+  const unreserved = intel();
+  unreserved.rooms.W0N2!.controller = { level: 0 };
+  expect(remoteHaulerSpawnNeed({ ...base, intel: unreserved })).toBeNull();
 });

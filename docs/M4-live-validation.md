@@ -49,3 +49,16 @@
 ## 监控
 
 - `node scripts/live-monitor.mjs artifacts/live/baseline-1789645458537`(盈余升级修复部署基线),窗口制滚动重启。
+
+## 2026-09-18 远程机组取代远矿工人(经济学修正)
+
+**动因**:pioneer 单兵自运模型实测净收益为负——W35S1(距离 2)交付 ~0.3/tick vs 成本摊销 ~0.7/tick,这个距离上永远翻不正(台账 2026-09-17 数据)。M4 验收条款"净收益为正"要求换打法:矿工蹲坑掉落(drop-miner)+ 搬运工往返。
+
+**切片**(同 §3.9 纵切纪律):
+- domain:`remoteMinerSpawnNeed`[WORK×5,CARRY,MOVE]=550 / `remoteHaulerSpawnNeed`[CARRY×4,MOVE×4]=400,搬运工按 `REMOTE_HAULERS_PER_MINER=3` 配给,矿工不在岗则搬运工不出门;共享目标规则(预定中/新鲜/冷却),冷却按角色分字段。
+- game:`driveRemoteMining`——矿工蹲源点采满即脚下掉落;搬运工捡最大掉落堆,≥150 起运线才返程,满载回母房喂 spawn/ext/容器;威胁撤离/目标失效退役与 pioneer 同纪律;死亡判定改计数快照(remoteCrew)。
+- clean cutover:pioneer 角色/门禁/探针全移除,pioneerDelivered 定格 1300,remoteDelivered 另起。
+- 探针:`--remote-probe`(test:remote)——miner 在场、hauler 在场、带货回家、remoteDelivered>0;实测 1500 tick 交付 **6628**(≈5/tick,探针经济下),对比 pioneer 0.13/tick。
+- 线上 W35S1 账目预估:收入 ~2.85/tick(3×[C4,M4] 全速搬运)vs 成本 (550+1200+650)/1500 ≈ 1.6/tick → 净 +1.2/tick,翻正。
+
+**门禁校准(同 2799 剃刀类)**:progression 的 storage 末帧点读(progress>0 @5499)被 mock CPU 混沌摆布——同语义六跑 0~1110 漂移,含改动前旧跑;放置行为六跑全部确定落点 4302。改为窗口判定(4300 后放置即过),storage 放置契约由 planning.test.ts 两个新单测确定性钉死(RCL4+塔在场→storage;塔未落→tower 优先/扩展未满基线→extension)。progression 3/3 绿。

@@ -137,6 +137,30 @@ describe('extension placement and construction', () => {
     expect(Math.max(Math.abs(x - 25), Math.abs(y - 25))).toBeGreaterThanOrEqual(2);
   });
 
+  it('places storage at RCL4 once the tower stage is underway', () => {
+    // 分批施工链(logistics.ts):扩展满基线 5 → tower 落点/落成 → storage。
+    // 放置是 RCL4 解锁的确定性契约;进度归引擎探针窗口(场景端末帧进度受
+    // mock CPU 混沌摆布,见 scenario-worker 台账注释)。
+    const towerSite = siteStub('tower-site', 'tower');
+    const { room, createConstructionSite } = engineStub({ level: 4, extensions: 5, sites: [towerSite] });
+    runLogistics(room as unknown as Room, [workerStub('w1', 0)] as unknown as Creep[], [], {});
+    expect(createConstructionSite).toHaveBeenCalledTimes(1);
+    expect(createConstructionSite.mock.calls[0]![2]).toBe('storage');
+  });
+
+  it('holds storage until extensions hit the base line and a tower exists', () => {
+    // 塔未落:storage 不解锁(收入与防御先于缓存);扩展未满基线:先铺扩展。
+    const rcl4NoTower = engineStub({ level: 4, extensions: 5 });
+    runLogistics(rcl4NoTower.room as unknown as Room, [workerStub('w1', 0)] as unknown as Creep[], [], {});
+    expect(rcl4NoTower.createConstructionSite).toHaveBeenCalledTimes(1);
+    expect(rcl4NoTower.createConstructionSite.mock.calls[0]![2]).toBe('tower');
+
+    const rcl4FewExt = engineStub({ level: 4, extensions: 4 });
+    runLogistics(rcl4FewExt.room as unknown as Room, [workerStub('w1', 0)] as unknown as Creep[], [], {});
+    expect(rcl4FewExt.createConstructionSite).toHaveBeenCalledTimes(1);
+    expect(rcl4FewExt.createConstructionSite.mock.calls[0]![2]).toBe('extension');
+  });
+
   it('stops placing once owned extensions reach the controller cap', () => {
     const { room, createConstructionSite } = engineStub({ level: 2, extensions: 5 });
     runLogistics(room as unknown as Room, [workerStub('w1', 0)] as unknown as Creep[], [], {});
