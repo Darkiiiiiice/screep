@@ -174,7 +174,10 @@ it('spawns a claimer only on full surplus against the top evaluated target needi
   const noEval = intel();
   delete noEval.evaluation;
   expect(claimerSpawnNeed({ ...base, intel: noEval })).toBeNull();
-  expect(claimerSpawnNeed({ ...base, intel: intel({ lastClaimerDeathAt: 900 }) })).toBeNull();
+  // 死亡冷却 150(须远小于 CLAIM 件寿命 600,否则预定链覆盖率被冷却拖垮):
+  // 100 tick 内仍拦截,150 已满即放行。
+  expect(claimerSpawnNeed({ ...base, intel: intel({ lastClaimerDeathAt: 1100 }) })).toBeNull();
+  expect(claimerSpawnNeed({ ...base, intel: intel({ lastClaimerDeathAt: 1050 }) })).toBe('W0N2');
   const reserved = intel();
   reserved.rooms.W0N2!.controller = { level: 0, reserver: 'me', reservationTicks: 4900 };
   expect(claimerSpawnNeed({ ...base, intel: reserved })).toBeNull();

@@ -190,8 +190,10 @@ export const CLAIMER_BODY_COST = 650;
 export const CLAIMER_WORKER_FLOOR = 4;
 /** 我方预定低于该余量即补刷(上限 5000,留足回程与波动)。 */
 export const CLAIMER_RESERVE_REFRESH = 2000;
-/** 预定者死亡冷却:650 的身体不许连续填坑(§1 失败有界)。 */
-export const CLAIMER_DEATH_COOLDOWN = 500;
+/** 预定者死亡冷却:防 650 连续填坑(§1 失败有界)。须远小于 CLAIM 件寿命
+ * 600(CREEP_CLAIM_LIFE_TIME):冷却是链覆盖率的分母,500 冷却会把覆盖率
+ * 压到 ~50% 以下,预定周期性断档(线上实证 2026-09-18)。 */
+export const CLAIMER_DEATH_COOLDOWN = 150;
 /** 交接提前量:现任 TTL 低于此值即孵继任者(旅行 ~150 + 孵化 ~6 + 攒 650 余量),
  * 预留不断档——线上实证:寿终->冷却->补孵->飞行链每周期留 ~650 tick 真空,
  * 真空期远矿工人读到"非我方预定"按规则自尽,白烧 400/具。

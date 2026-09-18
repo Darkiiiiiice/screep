@@ -203,12 +203,10 @@ export function runEvaluation(home: string): void {
  */
 export function driveClaimers(allies: readonly string[], cpuLimit: number): void {
   const intel = intelState();
-  const alive = new Set<string>();
   for (const creep of Object.values(Game.creeps)) {
     const mem = creep.memory;
     if (mem.role !== 'claimer' || creep.spawning) continue;
     if (Game.cpu.getUsed() >= cpuLimit) break;
-    alive.add(creep.name);
     const target = mem.claimTarget;
     const room = target ? intel.rooms[target] : undefined;
     // 退役判据用武装而非人头:无武装过路斥候不配让我们放弃一个已预定的房
@@ -236,16 +234,18 @@ export function driveClaimers(allies: readonly string[], cpuLimit: number): void
     if (creep.pos.isNearTo(controller)) creep.reserveController(controller);
     else creep.moveTo(controller);
   }
-  if (intel.claimerActive && !alive.has(intel.claimerActive) && !Object.values(Game.creeps).some(c => c.name === intel.claimerActive)) {
-    // 死亡探针:名字后缀即孵化 tick,记录享年——线上 claimer 连续夭折(~1000
-    // 而非 1500 寿终)且末次观测威胁为 0,需要年龄数据区分寿终/夭折频率。
+  // 继任者优先:有任何 claimer 在册(含孵化中),指针直接移交——重叠交接期
+  // 长老寿终不得触发死亡冷却,否则 500 冷却会白白冻结下一次交接(线上实证)。
+  const active = Object.values(Game.creeps).find(c => c.memory.role === 'claimer');
+  if (active) {
+    intel.claimerActive = active.name;
+  } else if (intel.claimerActive && !Object.values(Game.creeps).some(c => c.name === intel.claimerActive)) {
+    // 全员尽没才算死亡事件。死亡探针:名字后缀即孵化 tick,记录享年。
     const born = Number(intel.claimerActive.split('-').pop());
     if (Number.isFinite(born)) intel.lastClaimerDeathAge = Game.time - born;
     intel.lastClaimerDeathAt = Game.time;
     delete intel.claimerActive;
   }
-  const active = Object.values(Game.creeps).find(c => c.memory.role === 'claimer');
-  if (active) intel.claimerActive = active.name;
 }
 
 /** 远程搬运工离家交付的最低载货量:半空就跑长途会把运力烧在路上。 */
