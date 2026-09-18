@@ -32,7 +32,9 @@ export interface IntelMemory {
  /** 最近一次 scout 死亡(含退役)的 tick,用于复活冷却。 */
  lastScoutDeathAt?: number;
  /** 最近一次预定者死亡的 tick,用于死亡冷却。 */
- lastClaimerDeathAt?: number;
+  lastClaimerDeathAt?: number;
+  /** 上一位 claimer 享年(死亡探针,诊断换班链断裂原因)。 */
+  lastClaimerDeathAge?: number;
  /** 在飞预定者名(失踪判定用)。 */
  claimerActive?: string;
  /** 最近一次远程矿工/搬运工死亡的 tick,用于各自的死亡冷却。 */

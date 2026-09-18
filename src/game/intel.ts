@@ -237,6 +237,10 @@ export function driveClaimers(allies: readonly string[], cpuLimit: number): void
     else creep.moveTo(controller);
   }
   if (intel.claimerActive && !alive.has(intel.claimerActive) && !Object.values(Game.creeps).some(c => c.name === intel.claimerActive)) {
+    // 死亡探针:名字后缀即孵化 tick,记录享年——线上 claimer 连续夭折(~1000
+    // 而非 1500 寿终)且末次观测威胁为 0,需要年龄数据区分寿终/夭折频率。
+    const born = Number(intel.claimerActive.split('-').pop());
+    if (Number.isFinite(born)) intel.lastClaimerDeathAge = Game.time - born;
     intel.lastClaimerDeathAt = Game.time;
     delete intel.claimerActive;
   }
