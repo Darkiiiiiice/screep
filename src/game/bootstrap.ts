@@ -204,20 +204,28 @@ export function runBootstrap(): void {
             else {
               // 远程机组:预定生效后的第三顺位盈余(§3.9 DEPLOY)——矿工先行,
               // 在岗后按 REMOTE_HAULERS_PER_MINER 配搬运工。
-              const remoteMiners = Object.values(Game.creeps).filter(c => c.memory.role === 'remoteMiner').length;
-              const remoteHaulers = Object.values(Game.creeps).filter(c => c.memory.role === 'remoteHauler').length;
-              const rMinerTarget = remoteMinerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
-                energyAvailable: room.energyAvailable, minerAlive: remoteMiners > 0, me: idle.owner.username, now: Game.time });
-              if (rMinerTarget) {
-                idle.spawnCreep([WORK, WORK, WORK, WORK, WORK, CARRY, MOVE], `rminer-${room.name}-${Game.time}`, { memory: { role: 'remoteMiner', remoteTarget: rMinerTarget, home: room.name } });
-              } else {
-                const rHaulerTarget = remoteHaulerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
-                  energyAvailable: room.energyAvailable, haulers: remoteHaulers, miners: remoteMiners, me: idle.owner.username, now: Game.time });
-                if (rHaulerTarget) idle.spawnCreep([CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], `rhauler-${room.name}-${Game.time}`, { memory: { role: 'remoteHauler', remoteTarget: rHaulerTarget, home: room.name } });
+              // 预定者需求挂起(各门齐、只差能量)时机组暂停孵化攒 650:预定是
+              // 机组的命脉,交接窗口被低价机组零件截胡会造成预定真空(线上实证
+              // 2026-09-18:claimer 寿终撞上机组孵化期,真空 ~400 tick)。
+              const claimPending = claimerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
+                energyAvailable: room.energyCapacityAvailable, claimerAlive: claimerTtls.length > 0, claimerTtl: claimerTtls.length ? Math.max(...claimerTtls) : undefined,
+                me: idle.owner.username, now: Game.time }) !== null;
+              if (!claimPending) {
+                const remoteMiners = Object.values(Game.creeps).filter(c => c.memory.role === 'remoteMiner').length;
+                const remoteHaulers = Object.values(Game.creeps).filter(c => c.memory.role === 'remoteHauler').length;
+                const rMinerTarget = remoteMinerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
+                  energyAvailable: room.energyAvailable, minerAlive: remoteMiners > 0, me: idle.owner.username, now: Game.time });
+                if (rMinerTarget) {
+                  idle.spawnCreep([WORK, WORK, WORK, WORK, WORK, CARRY, MOVE], `rminer-${room.name}-${Game.time}`, { memory: { role: 'remoteMiner', remoteTarget: rMinerTarget, home: room.name } });
+                } else {
+                  const rHaulerTarget = remoteHaulerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
+                    energyAvailable: room.energyAvailable, haulers: remoteHaulers, miners: remoteMiners, me: idle.owner.username, now: Game.time });
+                  if (rHaulerTarget) idle.spawnCreep([CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], `rhauler-${room.name}-${Game.time}`, { memory: { role: 'remoteHauler', remoteTarget: rHaulerTarget, home: room.name } });
+                }
               }
-            }
           }
         }
+      }
       }
       const cursor = state.workerCursors![room.name] ?? 0;
       isolate(state, 'intel-spawn', () => maybeSpawnScout(room, spawns, plan.spawn || spawnWaiting));
