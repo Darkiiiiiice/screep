@@ -227,7 +227,10 @@ export function claimerSpawnNeed(args: {
   const room = args.intel.rooms[target];
   if (!room || isStale(room, args.now)) return null;
   const controller = room.controller;
-  if (controller?.reserver === args.me && (controller.reservationTicks ?? 0) >= CLAIMER_RESERVE_REFRESH) return null;
+  // 情报是快照:余量须按观测年龄折算(线上实证:直接信快照会把链睡死——
+  // 读数 2441 时真实已跌破刷新线,isStale 后彻底堵死,全靠 scout 兜底重启)。
+  const effectiveTicks = (controller?.reservationTicks ?? 0) - Math.max(0, args.now - room.observedAt);
+  if (controller?.reserver === args.me && effectiveTicks >= CLAIMER_RESERVE_REFRESH) return null;
   return target;
 }
 

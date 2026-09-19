@@ -182,6 +182,12 @@ it('spawns a claimer only on full surplus against the top evaluated target needi
   reserved.rooms.W0N2!.controller = { level: 0, reserver: 'me', reservationTicks: 4900 };
   expect(claimerSpawnNeed({ ...base, intel: reserved })).toBeNull();
   reserved.rooms.W0N2!.controller = { level: 0, reserver: 'me', reservationTicks: 1000 };
+  // 快照须按观测年龄折算:读数 2100 高于刷新线,但观测已 400 tick 前,
+  // 有效余量 1700 跌破刷新线 -> 应补孵(线上实证:信快照会把预定链睡死)。
+  const staleRead = intel();
+  staleRead.rooms.W0N2!.observedAt = 800;
+  staleRead.rooms.W0N2!.controller = { level: 0, reserver: 'me', reservationTicks: 2100 };
+  expect(claimerSpawnNeed({ ...base, intel: staleRead })).toBe('W0N2');
   expect(claimerSpawnNeed({ ...base, intel: reserved })).toBe('W0N2');
 });
 
