@@ -55,6 +55,9 @@ export interface IntelMemory {
  /** 已占领殖民地台账:房名 → 占领/落成/灭队记录(M5-3 启动队消费令箭;
   * spawnedAt 落地即毕业交还本地循环;lastSquadCount 驱动灭队判定)。 */
  colonies?: Record<string, { claimedAt: number; spawnedAt?: number; lastPioneerWipeAt?: number; lastSquadCount?: number }>;
+ /** 评估根房间:距离缓存全是根相对的,首评锚定,根房失守才重锚并清缓存
+  * (否则殖民房入环后以殖民房为原点重算,双榜混入两套距离)。 */
+ rootRoom?: string;
  /** home→各房跳数缓存(路由静态,不随时间失效)。 */
  distances?: Record<string, number>;
 }
@@ -406,4 +409,14 @@ export function pioneerSpawnNeed(args: {
     return name;
   }
   return null;
+}
+
+/**
+ * 评估根房间抉择(纯):根房仍在我手即维持(返回原根);首评或根房失守
+ * (丢失/被夺)重锚到调用方并要求清空距离缓存——distances 全是根相对的,
+ * 换根不清缓存会让双榜混入两套距离。
+ */
+export function resolveEvaluationRoot(root: string | undefined, home: string, rootOwned: boolean): { root: string; clear: boolean } {
+  if (root !== undefined && rootOwned) return { root, clear: false };
+  return { root: home, clear: root !== undefined };
 }

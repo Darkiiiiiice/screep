@@ -7,6 +7,7 @@ import {
   remoteMinerSpawnNeed,
   colonizerSpawnNeed,
   pioneerSpawnNeed,
+  resolveEvaluationRoot,
   evaluateColonizeTargets,
   evaluateRemoteTargets,
   INTEL_STALE,
@@ -332,4 +333,13 @@ it('fields haulers only while a miner is on station, capped per miner', () => {
   const unreserved = intel();
   unreserved.rooms.W0N2!.controller = { level: 0 };
   expect(remoteHaulerSpawnNeed({ ...base, intel: unreserved })).toBeNull();
+});
+
+it('pins the evaluation root and re-anchors with a distance-cache wipe on root loss', () => {
+  // 首评锚定调用方,不清缓存(尚无缓存可清)。
+  expect(resolveEvaluationRoot(undefined, 'W0N1', false)).toEqual({ root: 'W0N1', clear: false });
+  // 根房在我手:维持原根——殖民房调用不得改锚(距离缓存全是根相对的)。
+  expect(resolveEvaluationRoot('W0N1', 'W0N2', true)).toEqual({ root: 'W0N1', clear: false });
+  // 根房失守:重锚到调用方并清缓存;无根失守(首评外不可能)语义同上。
+  expect(resolveEvaluationRoot('W0N1', 'W0N2', false)).toEqual({ root: 'W0N2', clear: true });
 });

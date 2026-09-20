@@ -23,6 +23,7 @@ import {
   observe,
   pruneIntel,
   pruneUnreachable,
+  resolveEvaluationRoot,
   shouldSpawnScout,
   type IntelMemory,
   type RoomIntel,
@@ -191,6 +192,14 @@ export const EVAL_INTERVAL = 25;
 export function runEvaluation(home: string): void {
   if (Game.time % EVAL_INTERVAL !== 0) return;
   const intel = intelState();
+  // 根房间锚定:只有根房执行评估。distances 缓存全是根相对的——殖民房
+  // 毕业后若以殖民房为原点重算,双榜混入两套距离(殖民房入环审计发现)。
+  // 首评锚定;根房失守才重锚到当前房并清缓存(§3.14 残局重锚)。
+  const rootOwned = intel.rootRoom !== undefined && Game.rooms[intel.rootRoom]?.controller?.my === true;
+  const resolved = resolveEvaluationRoot(intel.rootRoom, home, rootOwned);
+  if (resolved.clear) intel.distances = {};
+  intel.rootRoom = resolved.root;
+  if (home !== resolved.root) return;
   const distances = intel.distances ??= {};
   for (const name of Object.keys(intel.rooms)) {
     if (distances[name] !== undefined) continue;

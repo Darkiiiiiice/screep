@@ -44,7 +44,7 @@ assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
 assert(!remoteProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--remote-probe requires --lifecycle --logistics');
 assert(!colonizeProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe && !remoteProbe, '--colonize-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 1200 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -730,6 +730,19 @@ try {
         colonyObjs.some(o => o.type === 'spawn' && o.user === bot.id));
       check('colony graduated in the ledger (spawnedAt)',
         typeof lastMem.intel?.colonies?.W0N2?.spawnedAt === 'number');
+      // M5-4 独立补员(窗口 2400 > pioneer 出生 ~350 + TTL 1500,启动队全部
+      // 寿终后殖民房须靠自己的 spawn 维生):殖民房自孵工人存在(名字带房名
+      // 后缀)且末帧仍在册;启动队毕业后门禁关闭不补员,末帧 pioneer 清零
+      // 即证明供养关系纯粹。
+      const colonyBorn = (mem) => Object.keys(mem.creeps ?? {}).filter(n => n.startsWith('worker-W0N2-'));
+      check('colony spawned its own workers', report.ticks.some(t => colonyBorn(t.memory).length > 0));
+      check('colony outlives the pioneer squad (self-sustaining population)',
+        colonyBorn(lastMem).length > 0
+        && !Object.keys(lastMem.creeps ?? {}).some(n => n.startsWith('pioneer-')));
+      check('colony controller kept upgrading past RCL1',
+        (rooms.W0N2?.controller?.level ?? 0) >= 2);
+      // 评估根锚定:殖民房毕业后双榜仍以母房为根(防距离缓存污染)。
+      check('evaluation stays rooted at the home room', lastMem.intel?.rootRoom === 'W0N1');
     }
     if (intelProbe) {
       const rooms = report.ticks.at(-1).memory.intel?.rooms ?? {};
