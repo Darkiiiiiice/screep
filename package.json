@@ -42,7 +42,8 @@
     "test:miners": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --miners-probe",
     "test:claim": "node scripts/scenario.mjs --lifecycle --logistics --claim-probe",
     "test:remote": "node scripts/scenario.mjs --lifecycle --logistics --remote-probe",
-    "test:colonize": "node scripts/scenario.mjs --lifecycle --logistics --colonize-probe"
+    "test:colonize": "node scripts/scenario.mjs --lifecycle --logistics --colonize-probe",
+    "test:combat": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --combat-probe"
   },
   "dependencies": {
     "screeps-api": "^2.1.0"

@@ -1,9 +1,12 @@
 import { towerTargets, type HostileInput } from '../domain/defense';
+import { GUARD_RETREAT_RATIO } from '../domain/combat';
 import { selectRepairTarget } from '../domain/maintenance';
 
 declare global {
   interface Memory {
     defenseStats?: Record<string, { attacks: number; heals: number; lastHostile: number }>;
+    /** 守卫损失台账:names 为上 tick 在册守卫,威胁期内消失即计阵亡。 */
+    guardLoss?: Record<string, { count: number; since: number; names: string[] }>;
   }
 }
 
@@ -12,6 +15,54 @@ const TOWER_HEAL_COST = 10;
 const TOWER_REPAIR_COST = 10;
 /** Heal/repair hold this reserve back; attacks may always spend it all. */
 const TOWER_DEFENSE_RESERVE = 100;
+
+/** 威胁平静超过此时长且零损失即销账(威胁期结束)。 */
+const GUARD_EPISODE_TAIL = 100;
+
+const armedCount = (c: Creep) =>
+  c.body.filter((p) => p.type === ATTACK || p.type === RANGED_ATTACK).length;
+
+/**
+ * Guard driver: engage the nearest armed hostile, retreat into tower-heal
+ * range below GUARD_RETREAT_RATIO, fall back to spawn-side post when clear.
+ * Also maintains the per-room loss ledger consumed by guardSpawnNeed
+ * (losses bound re-spawning: an unwinnable fight stops burning 260-creep
+ * bodies after GUARD_LOSS_BUDGET deaths).
+ */
+export function driveGuards(room: Room, allies: readonly string[] = []): void {
+  const guards = Object.values(Game.creeps)
+    .filter((c) => c.memory.role === 'guard' && c.room.name === room.name);
+  const hostiles = room.find(FIND_HOSTILE_CREEPS)
+    .filter((c) => !allies.includes(c.owner?.username ?? ''))
+    .filter((c) => armedCount(c) > 0);
+  const ledger = (Memory.guardLoss ??= {});
+  const rec = ledger[room.name] ?? (ledger[room.name] = { count: 0, since: Game.time, names: [] });
+  const alive = new Set(guards.map((g) => g.name));
+  if (hostiles.length) {
+    rec.count += rec.names.filter((n) => !alive.has(n)).length;
+    rec.since = Game.time;
+  } else if (rec.count === 0 && Game.time - rec.since > GUARD_EPISODE_TAIL) {
+    delete ledger[room.name];
+    return;
+  }
+  rec.names = guards.map((g) => g.name);
+
+  const spawn = room.find(FIND_MY_SPAWNS)[0];
+  for (const guard of guards) {
+    if (guard.hits / guard.hitsMax < GUARD_RETREAT_RATIO && spawn) {
+      guard.moveTo(spawn.pos, { range: 3, reusePath: 10 });
+      continue;
+    }
+    const target = guard.pos.findClosestByRange(hostiles);
+    if (target) {
+      if (guard.pos.inRangeTo(target, 1)) guard.attack(target);
+      else guard.moveTo(target.pos, { range: 1, reusePath: 10 });
+    } else if (spawn && !guard.pos.inRangeTo(spawn.pos, 2)) {
+      guard.moveTo(spawn.pos, { range: 2, reusePath: 20 });
+    }
+  }
+}
+
 
 /**
  * Tower defense: focus-fire the highest-threat hostile, heal the most damaged

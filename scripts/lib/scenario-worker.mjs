@@ -31,6 +31,8 @@ const minersProbe = args.includes('--miners-probe');
 const claimProbe = args.includes('--claim-probe');
 const remoteProbe = args.includes('--remote-probe');
 const colonizeProbe = args.includes('--colonize-probe');
+const combatProbe = args.includes('--combat-probe');
+assert(!combatProbe || lifecycle && logistics && !construction && !fairnessProbe, '--combat-probe requires --lifecycle --logistics');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -44,7 +46,7 @@ assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
 assert(!remoteProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--remote-probe requires --lifecycle --logistics');
 assert(!colonizeProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe && !remoteProbe, '--colonize-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -53,9 +55,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -228,6 +230,16 @@ try {
       hits: 150, hitsMax: 300, store: { energy: 20 }, storeCapacity: 50, fatigue: 0, spawning: false, ageTime: 1501, actionLog: {},
     });
     report.defense = { tower: [24, 24], raiderHits: 1000, woundedHits: 150 };
+  }
+  if (combatProbe) {
+    // RCL3 + 低能塔:守卫孵化门与驱动的引擎级回归。塔只有 200 能量(约
+    // 3000 伤害),单塔杀不死 5000 HP 的重装 raider——耗尽后守卫门开票接管,
+    // 断言:守卫自动出生→歼敌→清场后不无限增员。
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 3, progress: 0 } });
+    await server.world.addRoomObject(fixture.room, 'tower', 24, 24, {
+      user: bot.id, store: { energy: 200 }, energy: 200, energyCapacity: 1000, hits: 3000, hitsMax: 3000,
+    });
+    report.combat = { tower: [24, 24], wave1At: 600, wave2At: 850, towerCap: 200 };
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -417,6 +429,32 @@ try {
       }
     }
 
+    // 注入窗口:引擎首启 tick(t1-2)的处理回冲会吞中途插入的对象(实证
+    // 2026-09-20:insert 读回 1、单 tick 后归零;t600 注入稳定存活),故两波
+    // 都放在工人地板达成(≥4 人,t~500)之后,守卫孵化门与驱动全链照常覆盖。
+    if (combatProbe && i === 600) {
+      await server.world.addRoomObject(fixture.room, 'creep', 34, 34, {
+        user: '2', name: 'Raider-1', body: [
+          ...Array.from({ length: 40 }, () => ({ type: 'attack', hits: 100 })),
+          ...Array.from({ length: 10 }, () => ({ type: 'move', hits: 100 })),
+        ],
+        hits: 5000, hitsMax: 5000, store: {}, storeCapacity: 0, fatigue: 0, spawning: false, ageTime: 2101, actionLog: {},
+      });
+      console.log('[combat] wave one: Raider-1 (5000 hp) at (34,34)');
+    }
+    if (combatProbe && i === 850) {
+      for (const [name, x] of [['Raider-2', 33], ['Raider-3', 35]]) {
+        await server.world.addRoomObject(fixture.room, 'creep', x, 34, {
+          user: '2', name, body: [
+            ...Array.from({ length: 20 }, () => ({ type: 'attack', hits: 100 })),
+            ...Array.from({ length: 30 }, () => ({ type: 'move', hits: 100 })),
+          ],
+          hits: 2000, hitsMax: 2000, store: {}, storeCapacity: 0, fatigue: 0, spawning: false, ageTime: 2351, actionLog: {},
+        });
+      }
+      console.log('[combat] wave two: Raider-2/3 (2000 hp) at (33,34)/(35,34)');
+    }
+
 
     if (persistentFailure && [450, 451, 452].includes(i)) {
       const current = JSON.parse(await bot.memory || '{}');
@@ -574,7 +612,7 @@ try {
       maxControllerIdle = Math.max(maxControllerIdle, controllerIdle);
       lastControllerProgress = delivered;
       if (i % 100 === 0) console.log(`[lifecycle] tick=${i} workers=${workers.length} progress=${delivered}`);
-      if (i % 100 === 0 || i === tickCount - 1 || economyProbe && i % 10 === 0) { report.ticks.push(snapshot); save(); }
+      if (i % 100 === 0 || i === tickCount - 1 || economyProbe && i % 10 === 0 || combatProbe && i % 25 === 0) { report.ticks.push(snapshot); save(); }
     } else if (!fairnessProbe) { report.ticks.push(snapshot); save(); }
     else if (i % 100 === 0 || i === tickCount - 1) { report.ticks.push({ time: snapshot.time, objects: snapshot.objects.filter(o => o.type === 'extension' || o.type === 'creep' || o.type === 'spawn'), ...(multiRoom ? { roomB: snapshot.roomB } : {}), memory: snapshot.memory }); save(); }
   }
@@ -766,6 +804,31 @@ try {
           const c = rooms[t.name]?.controller;
           return c && c.owner === undefined && (c.reserver === undefined || c.reserver === 'M0');
         }));
+    }
+    if (combatProbe) {
+      const guardNames = new Set(report.ticks.flatMap(t => Object.keys(t.memory.creeps ?? {}).filter(n => n.startsWith('guard-'))));
+      check('defender auto-spawned against armed invasion', guardNames.size > 0);
+      const raiderHits = (label) => report.ticks
+        .map(t => t.objects.find(o => o.type === 'creep' && o.name === label)?.hits)
+        .filter(h => h !== undefined);
+      check('wave-one raider was engaged and destroyed',
+        raiderHits('Raider-1').length > 0 && raiderHits('Raider-1').some(h => h < 5000)
+        && !report.ticks.at(-1).objects.some(o => o.name === 'Raider-1'));
+      check('wave-two raiders were engaged and destroyed',
+        raiderHits('Raider-2').length > 0 && raiderHits('Raider-2').some(h => h < 2000)
+        && !report.ticks.at(-1).objects.some(o => o.name === 'Raider-2' || o.name === 'Raider-3'));
+      const towerSeries = report.ticks.map(t => t.objects.find(o => o.type === 'tower')?.store?.energy ?? t.objects.find(o => o.type === 'tower')?.energy)
+        .filter(e => e !== undefined);
+      // 塔参战即可;防御储备断言落在 spawn:守卫/塔花钱不许把主孵化抽干。
+      check('tower contributed to the defense', towerSeries.some(e => e < report.combat.towerCap));
+      const spawnSeries = report.ticks.map(t => t.objects.find(o => o.type === 'spawn')?.store?.energy).filter(e => e !== undefined);
+      check('defense spending never drains the spawn', Math.min(...spawnSeries) > 0);
+      // 守卫 TTL 1500 覆盖全窗:清场后孵化门必须关死,不许无限增员。
+      check('guard roster stays at one (no spawn spam after clear)', guardNames.size === 1);
+      const ctrlProgress = (t) => t.objects.find(o => o.type === 'controller')?.progress;
+      const mid = report.ticks[Math.min(4, report.ticks.length - 1)];
+      check('economy keeps building after the invasions are cleared',
+        ctrlProgress(report.ticks.at(-1)) > ctrlProgress(mid));
     }
     report.lifecycle = { births, delivered, maxEmptyRun, maxControllerIdle };
     if (logistics) check('controller service resumes within 400 ticks with three workers', maxControllerIdle <= 400);

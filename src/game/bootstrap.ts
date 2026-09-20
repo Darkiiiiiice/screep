@@ -1,8 +1,9 @@
 import { energyBudget, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
 import { validatePolicy, type Capabilities } from '../domain/config';
+import { guardSpawnNeed } from '../domain/combat';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { runLogistics, runMiners } from './logistics';
-import { runDefense } from './defense';
+import { driveGuards, runDefense } from './defense';
 import { flushTraffic, requestMove } from './traffic';
 import { driveClaimers, driveColonizers, drivePioneers, driveRemoteMining, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
 
@@ -148,6 +149,7 @@ export function runBootstrap(): void {
     const room = rooms[(i + state.cursor) % rooms.length]!;
     isolate(state, room.name, () => {
       isolate(state, 'defense', () => runDefense(room, policy.policy.allies));
+      isolate(state, 'guard', () => driveGuards(room, policy.policy.allies));
       const sources = room.find(FIND_SOURCES);
       const roomCreeps = room.find(FIND_MY_CREEPS);
       const creeps = roomCreeps.filter(c => c.memory.role !== 'miner' && c.memory.role !== 'pioneer' && c.getActiveBodyparts(WORK) > 0 && c.getActiveBodyparts(CARRY) > 0 && c.getActiveBodyparts(MOVE) > 0);
@@ -187,6 +189,21 @@ export function runBootstrap(): void {
       if (!plan.spawn) {
         const idle = spawns.find(s => !s.spawning);
         if (idle) {
+          // 守卫:M7 机动防御第一顺位(工人地板之后)——武装入侵在场时抢占
+          // 全部盈余支出;损失预算尽(劣势战场)则停开票,不再白烧 260 身体。
+          const armedHostiles = room.find(FIND_HOSTILE_CREEPS)
+            .filter(c => !policy.policy.allies.includes(c.owner?.username ?? ''))
+            .filter(c => c.body.some(p => p.type === ATTACK || p.type === RANGED_ATTACK));
+          const guards = Object.values(Game.creeps).filter(c => c.memory.role === 'guard' && c.room.name === room.name);
+          const guardTtls = guards.map(c => c.ticksToLive ?? 0);
+          const guardNeed = guardSpawnNeed({
+            hostiles: armedHostiles.map(c => ({ armed: c.body.filter(p => p.type === ATTACK || p.type === RANGED_ATTACK).length, hits: c.hits })),
+            guards: guards.length, guardTtl: guardTtls.length ? Math.max(...guardTtls) : undefined,
+            capacity: room.energyCapacityAvailable, energyAvailable: room.energyAvailable,
+            losses: Memory.guardLoss?.[room.name]?.count ?? 0,
+          });
+          if (guardNeed) idle.spawnCreep([ATTACK, ATTACK, MOVE, MOVE], `guard-${room.name}-${Game.time}`, { memory: { role: 'guard' } });
+          else {
           const containers = room.find(FIND_STRUCTURES).filter(s => s.structureType === STRUCTURE_CONTAINER);
           const need = minerSpawnNeed({ capacity: room.energyCapacityAvailable, energyAvailable: room.energyAvailable,
             workerCount: creeps.length, workerSpawnPending: spawnWaiting,
@@ -246,6 +263,7 @@ export function runBootstrap(): void {
               }
           }
         }
+      }
       }
       }
       const cursor = state.workerCursors![room.name] ?? 0;
