@@ -27,6 +27,7 @@ import {
   type IntelMemory,
   type RoomIntel,
 } from '../domain/intel';
+import { spawnTile } from '../domain/planning';
 
 declare global {
   interface Memory { intel?: IntelMemory }
@@ -44,6 +45,8 @@ declare global {
     remoteTarget?: string;
     /** 殖民者目标房名(M5)。 */
     colonizeTarget?: string;
+    /** 启动队殖民地房名(M5-3)。 */
+    colony?: string;
   }
 }
 
@@ -307,6 +310,100 @@ export function driveColonizers(allies: readonly string[], cpuLimit: number): vo
   } else if (intel.colonizerActive && !Object.values(Game.creeps).some(c => c.name === intel.colonizerActive)) {
     intel.lastColonizerDeathAt = Game.time;
     delete intel.colonizerActive;
+  }
+}
+
+/**
+ * 每 tick 驱动启动队(M5-3 §3.14,自驱单位,不进各房工人循环):
+ * - 赶路:与预定者同款跨房导航;情报过期或武装威胁时在母房待命(失去视野
+ *   ≠安全),威胁清零自动复工;
+ * - 在殖民地:顺手重观测;自采→优先建 spawn 工地(无工地且無 spawn 即用
+ *   spawnTile 落子)→spawn 落成后喂 spawn/扩展,余量升级控制器;
+ * - 毕业:观察到 spawn 即记 colonies[].spawnedAt——此后本地房循环接管;
+ * - 失格(台账移除/归属丢失/路由不可达)即退役;灭队记 lastPioneerWipeAt
+ *   冷却(§1 失败有界),判定与 claimer 同款:含孵化中的在册计数从有到无。
+ */
+export function drivePioneers(allies: readonly string[], cpuLimit: number): void {
+  const intel = intelState();
+  const colonies = intel.colonies ?? {};
+  for (const creep of Object.values(Game.creeps)) {
+    const mem = creep.memory;
+    if (mem.role !== 'pioneer' || creep.spawning) continue;
+    if (Game.cpu.getUsed() >= cpuLimit) break;
+    const target = mem.colony;
+    const colony = target ? colonies[target] : undefined;
+    if (!target || !colony) { creep.suicide(); continue; }
+    const home = mem.home;
+    if (creep.room.name !== target) {
+      // 待命判据:情报过期或武装威胁时不进殖民房(撤离/滞留都在母房侧)。
+      const known = intel.rooms[target];
+      const hold = known === undefined || isStale(known, Game.time) || known.threat.armed > 0;
+      const destination = hold && home ? home : target;
+      try {
+        creep.moveTo(new RoomPosition(25, 25, destination), { range: 22, reusePath: 20 });
+      } catch {
+        if (!hold) {
+          markUnreachable(intel, target, Game.time);
+          creep.suicide();
+        }
+      }
+      continue;
+    }
+    intel.rooms[target] = observeRoom(creep.room, allies);
+    if (creep.room.controller?.owner !== undefined && creep.room.controller.owner.username !== creep.owner.username) {
+      // 殖民地易主:任务失格,退役(不记灭队——归属判据会拦住后续补员)。
+      creep.suicide();
+      continue;
+    }
+    const spawn = creep.room.find(FIND_MY_SPAWNS)[0];
+    if (spawn && colony.spawnedAt === undefined) colony.spawnedAt = Game.time;
+    if (creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
+      const source = creep.pos.findClosestByRange(creep.room.find(FIND_SOURCES).filter(s => s.energy > 0));
+      if (source && creep.harvest(source) === ERR_NOT_IN_RANGE) creep.moveTo(source, { reusePath: 20 });
+      continue;
+    }
+    if (!spawn) {
+      const site = creep.room.find(FIND_MY_CONSTRUCTION_SITES).find(s => s.structureType === STRUCTURE_SPAWN);
+      if (site) {
+        if (creep.pos.inRangeTo(site, 3)) creep.build(site);
+        else creep.moveTo(site, { range: 3, reusePath: 20 });
+        continue;
+      }
+      const controller = creep.room.controller;
+      if (!controller) continue;
+      const terrain = creep.room.getTerrain();
+      const structures = new Set(creep.room.find(FIND_STRUCTURES).map(s => `${s.pos.x}:${s.pos.y}`));
+      const sites = new Set(creep.room.find(FIND_CONSTRUCTION_SITES).map(s => `${s.pos.x}:${s.pos.y}`));
+      const free = (x: number, y: number) => terrain.get(x, y) !== TERRAIN_MASK_WALL && !structures.has(`${x}:${y}`) && !sites.has(`${x}:${y}`);
+      const passable = (x: number, y: number) => x >= 0 && x < 50 && y >= 0 && y < 50 && free(x, y);
+      const tile = spawnTile({ x: controller.pos.x, y: controller.pos.y },
+        creep.room.find(FIND_SOURCES).map(s => ({ x: s.pos.x, y: s.pos.y })), free, passable);
+      if (tile) {
+        const result = creep.room.createConstructionSite(tile.x, tile.y, STRUCTURE_SPAWN);
+        if (result !== OK) console.log(`[pioneer] spawn site at ${tile.x},${tile.y} failed: ${result}`);
+      }
+      continue;
+    }
+    const sink = creep.pos.findClosestByRange(creep.room.find(FIND_MY_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension =>
+      (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION) && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0));
+    if (sink) {
+      if (creep.transfer(sink, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) creep.moveTo(sink, { reusePath: 20 });
+      continue;
+    }
+    const controller = creep.room.controller;
+    if (controller?.my && creep.upgradeController(controller) === ERR_NOT_IN_RANGE) creep.moveTo(controller, { range: 3, reusePath: 20 });
+  }
+  // 灭队对账(claimer 同款):含孵化中的在册计数从有到无才记冷却。
+  const counts: Record<string, number> = {};
+  for (const creep of Object.values(Game.creeps)) {
+    if (creep.memory.role !== 'pioneer') continue;
+    const colony = creep.memory.colony;
+    if (colony) counts[colony] = (counts[colony] ?? 0) + 1;
+  }
+  for (const [name, colony] of Object.entries(colonies)) {
+    const count = counts[name] ?? 0;
+    if ((colony.lastSquadCount ?? 0) > 0 && count === 0) colony.lastPioneerWipeAt = Game.time;
+    colony.lastSquadCount = count;
   }
 }
 

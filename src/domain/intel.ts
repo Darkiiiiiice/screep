@@ -52,8 +52,9 @@ export interface IntelMemory {
  colonizerActive?: string;
  /** 最近一次殖民者死亡的 tick(M5 死亡冷却)。 */
  lastColonizerDeathAt?: number;
- /** 已占领殖民地台账:房名 → 占领时刻(M5-3 启动队消费)。 */
- colonies?: Record<string, { claimedAt: number }>;
+ /** 已占领殖民地台账:房名 → 占领/落成/灭队记录(M5-3 启动队消费令箭;
+  * spawnedAt 落地即毕业交还本地循环;lastSquadCount 驱动灭队判定)。 */
+ colonies?: Record<string, { claimedAt: number; spawnedAt?: number; lastPioneerWipeAt?: number; lastSquadCount?: number }>;
  /** home→各房跳数缓存(路由静态,不随时间失效)。 */
  distances?: Record<string, number>;
 }
@@ -365,4 +366,44 @@ export function remoteHaulerSpawnNeed(args: {
  if (args.miners < 1 || args.haulers >= args.miners * REMOTE_HAULERS_PER_MINER) return null;
  if (args.intel.lastRemoteHaulerDeathAt !== undefined && args.now - args.intel.lastRemoteHaulerDeathAt < REMOTE_DEATH_COOLDOWN) return null;
  return remoteTarget(args);
+}
+
+/** 启动队(pioneer)身体 [WORK, CARRY, MOVE] 造价:自采自建的殖民先遣。 */
+export const PIONEER_BODY_COST = 200;
+/** 单殖民地启动队规模上限:建造/喂蛋/升级的最小自足单元,超编纯属烧钱。 */
+export const PIONEER_SQUAD_SIZE = 3;
+/** 与殖民者同地板:扩张是满员工人口粮外的盈余支出(§3.1 补员优先)。 */
+export const PIONEER_WORKER_FLOOR = 4;
+/** 启动队全灭冷却(§1 失败有界):灭队说明殖民地当前守不住或路不通。 */
+export const PIONEER_WIPE_COOLDOWN = 300;
+
+/**
+ * 启动队孵化决策(M5-3,纯):以殖民台账为令箭——已占领、spawn 未落成
+ * (spawnedAt 未记)、我方仍归属、情报新鲜、无武装威胁、路由可达、灭队冷却
+ * 已过的殖民地,按房名字典序补到 SQUAD_SIZE。情报快照判据与殖民榜同口径;
+ * 失去视野/归属丢失不填人(§3.6 失去视野≠安全)。返回目标房名或 null。
+ */
+export function pioneerSpawnNeed(args: {
+  intel: IntelMemory;
+  workers: number;
+  capacity: number;
+  energyAvailable: number;
+  pioneers: Record<string, number>;
+  me: string;
+  now: number;
+}): string | null {
+  if (args.capacity < PIONEER_BODY_COST || args.energyAvailable < PIONEER_BODY_COST) return null;
+  if (args.workers < PIONEER_WORKER_FLOOR) return null;
+  for (const [name, colony] of Object.entries(args.intel.colonies ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+    if (colony.spawnedAt !== undefined) continue;
+    if (colony.lastPioneerWipeAt !== undefined && args.now - colony.lastPioneerWipeAt < PIONEER_WIPE_COOLDOWN) continue;
+    if (args.intel.unreachable?.[name] !== undefined) continue;
+    const room = args.intel.rooms[name];
+    if (!room || isStale(room, args.now)) continue;
+    if (room.threat.armed > 0 || room.threat.towers > 0) continue;
+    if (room.controller?.owner !== args.me) continue;
+    if ((args.pioneers[name] ?? 0) >= PIONEER_SQUAD_SIZE) continue;
+    return name;
+  }
+  return null;
 }

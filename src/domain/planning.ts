@@ -66,3 +66,31 @@ export function preservesConnectivity(tile: Tile, passable: (x: number, y: numbe
   }
   return neighbors.every(n => reached.has(key(n.x, n.y)));
 }
+
+/**
+ * 殖民地 spawn 落点(纯,M5-3):控制器 2..6 环带内的可建格中,最小化到
+ * 控制器与各源的切比雪夫最远距离(minimax——spawn 是全房物流枢纽,兼顾
+ * 升级与采矿两个方向);同分按坐标字典序保证确定性。割点守卫与 extension
+ * 同款:落子不得把房间割断(v1 工地封路教训)。无合法格返回 undefined。
+ */
+export function spawnTile(controller: Tile, sources: readonly Tile[], free: (x: number, y: number) => boolean, passable: (x: number, y: number) => boolean): Tile | undefined {
+  let best: Tile | undefined;
+  let bestScore = Infinity;
+  for (let dx = -6; dx <= 6; dx++) {
+    for (let dy = -6; dy <= 6; dy++) {
+      const ring = Math.max(Math.abs(dx), Math.abs(dy));
+      if (ring < 2 || ring > 6) continue;
+      const x = controller.x + dx;
+      const y = controller.y + dy;
+      if (x < 2 || x > 47 || y < 2 || y > 47) continue;
+      if (!free(x, y)) continue;
+      if (!preservesConnectivity({ x, y }, passable)) continue;
+      const score = Math.max(ring, ...sources.map(s => Math.max(Math.abs(x - s.x), Math.abs(y - s.y))));
+      if (score < bestScore || (score === bestScore && best !== undefined && (x < best.x || (x === best.x && y < best.y)))) {
+        best = { x, y };
+        bestScore = score;
+      }
+    }
+  }
+  return best;
+}

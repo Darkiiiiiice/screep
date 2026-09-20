@@ -1,10 +1,10 @@
 import { energyBudget, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
 import { validatePolicy, type Capabilities } from '../domain/config';
-import { claimerSpawnNeed, colonizerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
+import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { runLogistics, runMiners } from './logistics';
 import { runDefense } from './defense';
 import { flushTraffic, requestMove } from './traffic';
-import { driveClaimers, driveColonizers, driveRemoteMining, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
+import { driveClaimers, driveColonizers, drivePioneers, driveRemoteMining, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
 
 interface WorkerState {
   phase: 'collect' | 'deliver';
@@ -150,7 +150,7 @@ export function runBootstrap(): void {
       isolate(state, 'defense', () => runDefense(room, policy.policy.allies));
       const sources = room.find(FIND_SOURCES);
       const roomCreeps = room.find(FIND_MY_CREEPS);
-      const creeps = roomCreeps.filter(c => c.memory.role !== 'miner' && c.getActiveBodyparts(WORK) > 0 && c.getActiveBodyparts(CARRY) > 0 && c.getActiveBodyparts(MOVE) > 0);
+      const creeps = roomCreeps.filter(c => c.memory.role !== 'miner' && c.memory.role !== 'pioneer' && c.getActiveBodyparts(WORK) > 0 && c.getActiveBodyparts(CARRY) > 0 && c.getActiveBodyparts(MOVE) > 0);
       const miners = roomCreeps.filter(c => c.memory.role === 'miner');
       const spawns = room.find(FIND_MY_SPAWNS);
       const travel = Math.max(10, ...sources.map(s => spawns[0]?.pos.getRangeTo(s) ?? 50)) * 4;
@@ -228,6 +228,19 @@ export function runBootstrap(): void {
                       energyAvailable: room.energyAvailable, colonizerAlive: Object.values(Game.creeps).some(c => c.memory.role === 'colonizer'),
                       gclFreeSlots: Game.gcl.level - Object.values(Game.rooms).filter(r => r.controller?.my).length, now: Game.time });
                     if (colonizeTarget) idle.spawnCreep([CLAIM, MOVE], `colonizer-${room.name}-${Game.time}`, { memory: { role: 'colonizer', colonizeTarget, home: room.name } });
+                    else {
+                      // 启动队:第五顺位盈余(M5-3)。以殖民台账为令箭,给已占领
+                      // 而 spawn 未落成的殖民地补先遣(自采自建,200/只)。
+                      const pioneerCounts: Record<string, number> = {};
+                      for (const c of Object.values(Game.creeps)) {
+                        if (c.memory.role !== 'pioneer') continue;
+                        const colony = c.memory.colony;
+                        if (colony) pioneerCounts[colony] = (pioneerCounts[colony] ?? 0) + 1;
+                      }
+                      const pioneerTarget = pioneerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
+                        energyAvailable: room.energyAvailable, pioneers: pioneerCounts, me: idle.owner.username, now: Game.time });
+                      if (pioneerTarget) idle.spawnCreep([WORK, CARRY, MOVE], `pioneer-${room.name}-${Game.time}`, { memory: { role: 'pioneer', colony: pioneerTarget, home: room.name } });
+                    }
                   }
                 }
               }
@@ -255,6 +268,7 @@ export function runBootstrap(): void {
   isolate(state, 'intel', () => driveScouts(policy.policy.allies, executionLimit));
   isolate(state, 'claim', () => driveClaimers(policy.policy.allies, executionLimit));
   isolate(state, 'colonize', () => driveColonizers(policy.policy.allies, executionLimit));
+  isolate(state, 'pioneer', () => drivePioneers(policy.policy.allies, executionLimit));
   isolate(state, 'remote', () => driveRemoteMining(executionLimit));
   state.rooms = { ...state.rooms, ...activeRooms };
   for (const name of Object.keys(state.rooms)) {

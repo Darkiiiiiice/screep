@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { extensionTiles, preservesConnectivity } from '../../src/domain/planning';
+import { extensionTiles, preservesConnectivity, spawnTile } from '../../src/domain/planning';
 import { runLogistics } from '../../src/game/logistics';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -59,6 +59,36 @@ describe('connectivity guard', () => {
     const open = mask((x, y) => (x === 20 && y === 20) || (x === 21 && y === 20) || (x === 22 && y === 20));
     expect(preservesConnectivity({ x: 22, y: 20 }, open)).toBe(true);
     expect(preservesConnectivity({ x: 21, y: 20 }, open)).toBe(false);
+  });
+});
+
+describe('colony spawn placement', () => {
+  const open = () => true;
+  const controller = { x: 25, y: 25 };
+  const sources = [{ x: 10, y: 10 }, { x: 40, y: 10 }];
+
+  it('minimizes the worst Chebyshev leg to controller and sources, deterministically', () => {
+    const tile = spawnTile(controller, sources, open, open);
+    expect(tile).toEqual({ x: 25, y: 19 });
+    expect(spawnTile(controller, sources, open, open)).toEqual(tile);
+  });
+
+  it('skips blocked tiles and takes the next best', () => {
+    const blocked = (x: number, y: number) => !(x === 25 && y === 19);
+    expect(spawnTile(controller, sources, blocked, blocked)).toEqual({ x: 25, y: 20 });
+  });
+
+  it('rejects corridor cut vertices and returns undefined when nothing is safe', () => {
+    // Endless one-tile-wide column: every candidate severs the only route.
+    const column = (x: number, y: number) => x === 12 && y >= 1 && y <= 49;
+    expect(spawnTile({ x: 12, y: 25 }, [{ x: 12, y: 1 }], column, column)).toBeUndefined();
+    expect(spawnTile(controller, sources, () => false, () => false)).toBeUndefined();
+  });
+
+  it('keeps the spawn off the controller doorstep ring', () => {
+    const tile = spawnTile({ x: 12, y: 12 }, [{ x: 12, y: 12 }], open, open);
+    expect(tile).toBeDefined();
+    expect(Math.max(Math.abs(tile!.x - 12), Math.abs(tile!.y - 12))).toBe(2);
   });
 });
 

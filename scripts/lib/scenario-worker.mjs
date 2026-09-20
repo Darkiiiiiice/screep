@@ -405,6 +405,18 @@ try {
       await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level, progress: 0 } });
       console.log(`[progression] stage bump to RCL${level} at tick ${i}`);
     }
+    if (colonizeProbe && i % 25 === 0 && !report.colonize?.sitePlacedAt) {
+      const site = (await server.world.roomObjects('W0N2')).find(o => o.type === 'constructionSite' && o.structureType === 'spawn');
+      if (site) {
+        // 放置行为已发生(这才是断言点);建造 15000 能量是时长问题不是行为
+        // 问题——中途提能到 14900 把"建成"折进窗口(与 RCL bump 同式注入)。
+        report.colonize.sitePlacedAt = i;
+        const { db } = server.common.storage;
+        await db['rooms.objects'].update({ _id: site._id }, { $set: { progress: 14900 } });
+        console.log(`[colonize] spawn site placed at tick ${i}, boosted to 14900`);
+      }
+    }
+
 
     if (persistentFailure && [450, 451, 452].includes(i)) {
       const current = JSON.parse(await bot.memory || '{}');
@@ -693,9 +705,12 @@ try {
     }
     if (colonizeProbe) {
       const lastMem = report.ticks.at(-1).memory;
-      // 出生证据走 memory(跨房单位,快照点读掷硬币——台账同款教训)。
-      check('colonizer spawned for the colonize target',
-        report.ticks.some(t => Object.keys(t.memory.creeps ?? {}).some(n => n.startsWith('colonizer-'))));
+      // 出生证据走台账不走快照:colonizer 快认领先死,可能整个生命周期落在
+      // 两个 100-tick 快照之间(实证:认领 282 < 快照 302,name 扫描漏报)。
+      // claimedAt + 死亡时间戳 = 出生/认领/退役全链路的权威证据。
+      check('colonizer dispatched, claimed and retired (ledger evidence)',
+        typeof lastMem.intel?.colonies?.W0N2?.claimedAt === 'number'
+        && typeof lastMem.intel?.lastColonizerDeathAt === 'number');
       // 占领落地以重观测回写的归属为准;台账 colonies 是 M5-3 启动队的令箭。
       const rooms = lastMem.intel?.rooms ?? {};
       check('colonizer entered the target room and refreshed intel',
@@ -704,6 +719,17 @@ try {
         rooms.W0N2?.controller?.owner === 'M0');
       check('colony ledger recorded the claim',
         typeof lastMem.intel?.colonies?.W0N2?.claimedAt === 'number');
+      // M5-3 启动队:占领后自动派队→自主落子 spawn 工地→建成→台账毕业。
+      // 跨房证据一律走 memory/世界直查,不走路径快照(快照只含母房对象)。
+      check('pioneer squad dispatched to the claimed colony',
+        report.ticks.some(t => Object.keys(t.memory.creeps ?? {}).some(n => n.startsWith('pioneer-'))));
+      check('pioneers placed the colony spawn site autonomously',
+        report.colonize?.sitePlacedAt !== undefined);
+      const colonyObjs = await server.world.roomObjects('W0N2');
+      check('colony spawn construction completed',
+        colonyObjs.some(o => o.type === 'spawn' && o.user === bot.id));
+      check('colony graduated in the ledger (spawnedAt)',
+        typeof lastMem.intel?.colonies?.W0N2?.spawnedAt === 'number');
     }
     if (intelProbe) {
       const rooms = report.ticks.at(-1).memory.intel?.rooms ?? {};

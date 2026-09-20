@@ -6,6 +6,7 @@ import {
   remoteHaulerSpawnNeed,
   remoteMinerSpawnNeed,
   colonizerSpawnNeed,
+  pioneerSpawnNeed,
   evaluateColonizeTargets,
   evaluateRemoteTargets,
   INTEL_STALE,
@@ -213,6 +214,40 @@ it('spawns a colonizer only with a free GCL slot and full surplus against the to
   const staleTarget = intel();
   staleTarget.rooms.W0N2!.observedAt = 1200 - INTEL_STALE;
   expect(colonizerSpawnNeed({ ...base, intel: staleTarget })).toBeNull();
+});
+it('dispatches pioneers only to owned ungraduated colonies within squad cap', () => {
+  const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
+    schema: 1,
+    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 1, owner: 'me' } } },
+    colonies: { W0N2: { claimedAt: 900 } },
+    ...over,
+  });
+  const base = { intel: intel(), workers: 6, capacity: 800, energyAvailable: 800, pioneers: {} as Record<string, number>, me: 'me', now: 1200 };
+  expect(pioneerSpawnNeed(base)).toBe('W0N2');
+  // 盈余门与地板(§3.1 补员优先)。
+  expect(pioneerSpawnNeed({ ...base, energyAvailable: 199 })).toBeNull();
+  expect(pioneerSpawnNeed({ ...base, capacity: 199 })).toBeNull();
+  expect(pioneerSpawnNeed({ ...base, workers: 3 })).toBeNull();
+  // 台账缺席/已毕业/归属丢失/武装威胁/过期/不可达均不填人(§3.6)。
+  const noColonies = intel();
+  delete noColonies.colonies;
+  expect(pioneerSpawnNeed({ ...base, intel: noColonies })).toBeNull();
+  expect(pioneerSpawnNeed({ ...base, intel: intel({ colonies: { W0N2: { claimedAt: 900, spawnedAt: 1100 } } }) })).toBeNull();
+  const lost = intel();
+  lost.rooms.W0N2!.controller = { level: 1, owner: 'enemy' };
+  expect(pioneerSpawnNeed({ ...base, intel: lost })).toBeNull();
+  const armed = intel();
+  armed.rooms.W0N2!.threat.armed = 2;
+  expect(pioneerSpawnNeed({ ...base, intel: armed })).toBeNull();
+  const stale = intel();
+  stale.rooms.W0N2!.observedAt = 1200 - INTEL_STALE;
+  expect(pioneerSpawnNeed({ ...base, intel: stale })).toBeNull();
+  expect(pioneerSpawnNeed({ ...base, intel: intel({ unreachable: { W0N2: 1000 } }) })).toBeNull();
+  // 满编停补;灭队冷却 300 内不再派(§1 失败有界),过后放行。
+  expect(pioneerSpawnNeed({ ...base, pioneers: { W0N2: 3 } })).toBeNull();
+  expect(pioneerSpawnNeed({ ...base, pioneers: { W0N2: 2 } })).toBe('W0N2');
+  expect(pioneerSpawnNeed({ ...base, intel: intel({ colonies: { W0N2: { claimedAt: 900, lastPioneerWipeAt: 1100 } } }) })).toBeNull();
+  expect(pioneerSpawnNeed({ ...base, intel: intel({ colonies: { W0N2: { claimedAt: 900, lastPioneerWipeAt: 890 } } }) })).toBe('W0N2');
 });
 it('spawns a claimer only on full surplus against the top evaluated target needing reservation', () => {
   const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
