@@ -2,6 +2,20 @@ export interface Supply { id: string; amount: number }
 export interface Demand { id: string; amount: number; priority: number }
 export interface Shipment { worker: string; from: string; to: string; amount: number }
 
+/**
+ * storage 保底线(M6-1):低于此能量,产业性取能(升级/建造/维修/升级护卫)
+ * 对 storage 不可见——保底留给紧急孵化与塔防(§关键岗位接替:storage 库存
+ * 不得视为已准备好)。生存链(搬运-孵化补货)不受此线约束,可以击穿保底。
+ */
+export const STORAGE_RESERVE_FLOOR = 1000;
+
+export interface FuelStockpile { id: string; energy: number; storage?: boolean }
+
+/** 产业取能视角的库存表:storage 低于保底线时被过滤,其余全量透传。 */
+export function refuelTargets(stockpiles: readonly FuelStockpile[], floor: number = STORAGE_RESERVE_FLOOR): FuelStockpile[] {
+  return stockpiles.filter(s => !s.storage || s.energy > floor);
+}
+
 /** Rebuilt each tick from observed stores: reservations never survive lost cargo. */
 export class LogisticsBoard {
   readonly shipments: Shipment[] = [];

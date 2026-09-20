@@ -1,8 +1,23 @@
-import { afterEach, expect, it, vi } from 'vitest';
-import { LogisticsBoard } from '../../src/domain/logistics';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LogisticsBoard, STORAGE_RESERVE_FLOOR, refuelTargets } from '../../src/domain/logistics';
 import { runLogistics } from '../../src/game/logistics';
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('storage reserve floor (M6-1)', () => {
+  const stock = (id: string, energy: number, storage = false) => ({ id, energy, storage });
+
+  it('hides storage at or below the floor from industry, keeps containers', () => {
+    const targets = refuelTargets([stock('c1', 10), stock('s1', STORAGE_RESERVE_FLOOR, true), stock('s2', STORAGE_RESERVE_FLOOR + 1, true)]);
+    expect(targets.map(t => t.id)).toEqual(['c1', 's2']);
+    expect(refuelTargets([stock('s1', 0, true)])).toEqual([]);
+  });
+
+  it('supports a custom floor', () => {
+    expect(refuelTargets([stock('s1', 150, true)], 150).map(t => t.id)).toEqual([]);
+    expect(refuelTargets([stock('s1', 151, true)], 150).map(t => t.id)).toEqual(['s1']);
+  });
+});
 
 it('releases both reservations exactly once when a worker abandons its order', () => {
   const board = new LogisticsBoard([{ id: 'mine', amount: 50 }], [{ id: 'spawn', amount: 50, priority: 10 }]);

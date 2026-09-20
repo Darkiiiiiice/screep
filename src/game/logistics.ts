@@ -1,4 +1,4 @@
-import { LogisticsBoard } from '../domain/logistics';
+import { LogisticsBoard, refuelTargets } from '../domain/logistics';
 import { planEconomy } from '../domain/economy';
 import { rankServices, settleService, type ServiceState } from '../domain/service';
 import { REPAIR_THRESHOLD, selectRepairTarget } from '../domain/maintenance';
@@ -256,6 +256,12 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   // once it exists (RCL4). Withdrawals read it without pulling from the haul loops.
   const storage = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureStorage => s.structureType === STRUCTURE_STORAGE && s.store.getUsedCapacity(RESOURCE_ENERGY) > 0)[0];
   const stockpiles = [...containers, ...(storage ? [storage] : [])];
+  // 产业取能视角(M6-1):storage 低于保底线(STORAGE_RESERVE_FLOOR)时对
+  // 升级/建造/维修不可见——保底留给紧急孵化与塔防;生存链(搬运-孵化补货)
+  // 仍走全量 stockpiles,可击穿保底。
+  const fuelStockpiles = refuelTargets(stockpiles.map(c => ({
+    id: c.id, energy: c.store.getUsedCapacity(RESOURCE_ENERGY), storage: c.structureType === STRUCTURE_STORAGE,
+  }))).map(f => stockpiles.find(c => c.id === f.id)!);
   // Urgent repair preemption is reserved for income containers — the miner's
   // transfer target per source, or anything holding energy. An empty legacy
   // container still queues for idle repair but never pauses construction.
@@ -277,7 +283,7 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
       delete worker.memory.containerBuilder;
       handled.add(worker.name);
       if (!worker.store.energy) {
-        const container = worker.pos.findClosestByRange(stockpiles.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
+        const container = worker.pos.findClosestByRange(fuelStockpiles.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
         if (container) {
           if (worker.withdraw(container, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) travel(worker, container.pos, 1);
         } else {
@@ -413,7 +419,7 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
       // Builders refuel from the logistics network (container/storage), not by
       // competing with miners for source tiles — mining throughput is capped by
       // the source, and a self-harvesting builder starves at 2 energy/tick.
-      const stock = builder.pos.findClosestByRange(stockpiles.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
+      const stock = builder.pos.findClosestByRange(fuelStockpiles.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
       if (stock) {
         if (builder.withdraw(stock, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) travel(builder, stock.pos, 1);
       } else {
@@ -469,7 +475,7 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
       } else {
         // Refuel from the logistics network, same as builders: containers are
         // the buffer, self-harvesting would compete with the capped miners.
-        const stock = creep.pos.findClosestByRange(stockpiles.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
+        const stock = creep.pos.findClosestByRange(fuelStockpiles.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
         if (!stock) continue;
         if (creep.withdraw(stock, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) travel(creep, stock.pos, 1);
       }

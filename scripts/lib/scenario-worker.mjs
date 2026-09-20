@@ -33,6 +33,8 @@ const remoteProbe = args.includes('--remote-probe');
 const colonizeProbe = args.includes('--colonize-probe');
 const combatProbe = args.includes('--combat-probe');
 assert(!combatProbe || lifecycle && logistics && !construction && !fairnessProbe, '--combat-probe requires --lifecycle --logistics');
+const storageProbe = args.includes('--storage-probe');
+assert(!storageProbe || lifecycle && logistics && !construction && !fairnessProbe, '--storage-probe requires --lifecycle --logistics');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -46,7 +48,7 @@ assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
 assert(!remoteProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--remote-probe requires --lifecycle --logistics');
 assert(!colonizeProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe && !remoteProbe, '--colonize-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -55,9 +57,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -240,6 +242,22 @@ try {
       user: bot.id, store: { energy: 200 }, energy: 200, energyCapacity: 1000, hits: 3000, hitsMax: 3000,
     });
     report.combat = { tower: [24, 24], wave1At: 600, wave2At: 850, towerCap: 200 };
+  }
+  if (storageProbe) {
+    // RCL4 + 预置 storage(M6-1 storage 调度与保底):两阶段——①t500 断矿
+    // (杀矿工+拆容器+杀 3 工人逼出孵化缺口):搬运链必须从 storage 补货喂
+    // spawn,补员不中断;②t900 冻结全场(spawn/扩展/塔满、无工地、storage
+    // 恰好压在保底线上):产业取能(升级/建造/维修)不得击穿保底。
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 4, progress: 0 } });
+    await server.world.addRoomObject(fixture.room, 'storage', 24, 22, {
+      user: bot.id, store: { energy: 5000 }, storeCapacityResource: { energy: 30000 }, hits: 10000, hitsMax: 10000,
+    });
+    for (const [x, y] of fixture.sources) {
+      await server.world.addRoomObject(fixture.room, 'container', x + 1, y, {
+        store: { energy: 0 }, storeCapacity: 2000, hits: 50000, hitsMax: 250000, nextDecayTime: 500,
+      });
+    }
+    report.storage = { storageAt: [24, 22], seed: 5000, floor: 1000, cutAt: 500, freezeAt: 900 };
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -455,6 +473,43 @@ try {
       console.log('[combat] wave two: Raider-2/3 (2000 hp) at (33,34)/(35,34)');
     }
 
+    if (storageProbe && i === 500) {
+      const { db } = server.common.storage;
+      const creeps = (await server.world.roomObjects(fixture.room)).filter(o => o.type === 'creep' && o.user === bot.id);
+      const miners = creeps.filter(c => c.name.startsWith('miner-')).map(c => c.name);
+      const workers = creeps.filter(c => c.name.startsWith('worker-')).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 3).map(c => c.name);
+      await db['rooms.objects'].removeWhere({ type: 'creep', name: { $in: [...miners, ...workers] } });
+      await db['rooms.objects'].removeWhere({ type: 'container' });
+      await db['rooms.objects'].removeWhere({ type: 'constructionSite', structureType: 'container' });
+      console.log(`[storage] income cut at tick ${i}: miners=${miners.length} killed, 3 workers killed, containers removed`);
+    }
+    if (storageProbe && i > 500 && i < 900 && i % 25 === 0) {
+      const { db } = server.common.storage;
+      await db['rooms.objects'].removeWhere({ type: 'constructionSite', structureType: 'container' });
+    }
+    if (storageProbe && i === 900) {
+      const { db } = server.common.storage;
+      const objs = await server.world.roomObjects(fixture.room);
+      const storage = objs.find(o => o.type === 'storage');
+      await db['rooms.objects'].update({ _id: storage._id }, { $set: { store: { energy: 800 } } });
+      const spawn = objs.find(o => o.type === 'spawn' && o.user === bot.id);
+      await db['rooms.objects'].update({ _id: spawn._id }, { $set: { store: { energy: 300 }, spawning: null } });
+      for (const ext of objs.filter(o => o.type === 'extension')) {
+        await db['rooms.objects'].update({ _id: ext._id }, { $set: { store: { energy: 50 } } });
+      }
+      for (const tower of objs.filter(o => o.type === 'tower')) {
+        await db['rooms.objects'].update({ _id: tower._id }, { $set: { store: { energy: 1000 } } });
+      }
+      await db['rooms.objects'].removeWhere({ type: 'constructionSite' });
+      await db['rooms.objects'].removeWhere({ type: 'road' });
+      console.log('[storage] frozen at tick 900: storage=800, spawn/ext/tower full, no sites, no roads');
+    }
+    if (storageProbe && i > 900 && i % 25 === 0) {
+      const { db } = server.common.storage;
+      await db['rooms.objects'].removeWhere({ type: 'constructionSite' });
+      await db['rooms.objects'].removeWhere({ type: 'road' });
+    }
+
 
     if (persistentFailure && [450, 451, 452].includes(i)) {
       const current = JSON.parse(await bot.memory || '{}');
@@ -612,7 +667,7 @@ try {
       maxControllerIdle = Math.max(maxControllerIdle, controllerIdle);
       lastControllerProgress = delivered;
       if (i % 100 === 0) console.log(`[lifecycle] tick=${i} workers=${workers.length} progress=${delivered}`);
-      if (i % 100 === 0 || i === tickCount - 1 || economyProbe && i % 10 === 0 || combatProbe && i % 25 === 0) { report.ticks.push(snapshot); save(); }
+      if (i % 100 === 0 || i === tickCount - 1 || economyProbe && i % 10 === 0 || combatProbe && i % 25 === 0 || storageProbe && i % 25 === 0) { report.ticks.push(snapshot); save(); }
     } else if (!fairnessProbe) { report.ticks.push(snapshot); save(); }
     else if (i % 100 === 0 || i === tickCount - 1) { report.ticks.push({ time: snapshot.time, objects: snapshot.objects.filter(o => o.type === 'extension' || o.type === 'creep' || o.type === 'spawn'), ...(multiRoom ? { roomB: snapshot.roomB } : {}), memory: snapshot.memory }); save(); }
   }
@@ -805,6 +860,26 @@ try {
           return c && c.owner === undefined && (c.reserver === undefined || c.reserver === 'M0');
         }));
     }
+    if (storageProbe) {
+      const storageSeries = report.ticks.map(t => ({ t: t.time, e: t.objects.find(o => o.type === 'storage')?.store?.energy }));
+      // 阶段一:断矿后搬运链从 storage 补货,孵化缺口被补上(缺料重规划)。
+      const drawn = storageSeries.filter(s => s.t > 500 && s.t <= 900 && s.e !== undefined && s.e < report.storage.seed - 400);
+      check('logistics re-routes through storage when income is cut', drawn.length > 0);
+      const replacementBorn = report.ticks.some(t => Object.keys(t.memory.creeps ?? {})
+        .some(n => n.startsWith('worker-') && Number(n.split('-').at(-1)) > report.storage.cutAt));
+      check('workforce replacement continues through the storage feed', replacementBorn);
+      const spawnFed = report.ticks.some(t => t.time > 500 && t.time <= 900
+        && t.objects.find(o => o.type === 'spawn')?.store?.energy >= 300);
+      check('spawn recovers to full through the storage feed', spawnFed);
+      // 阶段二:全场冻结、storage 压在保底线下(800<1000)。保底是"产业
+      // 不抽穿"不是"冻结":自采收入照常存入,生存链(塔防/孵化)合法取用,
+      // 产业(floor 过滤)在 ≤1000 时一概不可见。断言冻结值不被击穿。
+      const afterFreeze = storageSeries.filter(s => s.t > 900 && s.e !== undefined).map(s => s.e);
+      check('industry never breaches the storage reserve floor',
+        afterFreeze.length > 0 && Math.min(...afterFreeze) >= 800);
+      check('survival stock stays full while the floor holds',
+        report.ticks.at(-1).objects.find(o => o.type === 'spawn')?.store?.energy >= 290);
+    }
     if (combatProbe) {
       const guardNames = new Set(report.ticks.flatMap(t => Object.keys(t.memory.creeps ?? {}).filter(n => n.startsWith('guard-'))));
       check('defender auto-spawned against armed invasion', guardNames.size > 0);
@@ -841,7 +916,7 @@ try {
     // 容器库存按时间窗判定:供应容器会被搬运链路持续抽空(oscillate 0~N),
     // 末帧点读等价于掷硬币(台账 2026-09-17:同行为两跑 2 vs 0 能量)。改为
     // 后半程任一快照各源容器曾有能量——对"矿工从未交付"是更严格的真实证据。
-    if (logistics && !maintenanceProbe && !progressionProbe) {
+    if (logistics && !maintenanceProbe && !progressionProbe && !storageProbe) {
       const late = report.ticks.slice(Math.floor(report.ticks.length / 2));
       const containers = report.ticks.at(-1).objects.filter(o => o.type === 'container');
       const delivered = (x, y) => late.some(t => t.objects.some(o => o.type === 'container' && o.x === x && o.y === y && (o.store?.energy ?? 0) > 0));

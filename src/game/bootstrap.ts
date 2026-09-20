@@ -1,6 +1,7 @@
 import { energyBudget, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
 import { validatePolicy, type Capabilities } from '../domain/config';
 import { guardSpawnNeed } from '../domain/combat';
+import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { runLogistics, runMiners } from './logistics';
 import { driveGuards, runDefense } from './defense';
@@ -84,8 +85,14 @@ function work(creep: Creep, room: Room, sources: Source[], state: RuntimeMemory,
       return;
     }
     // Recover energy from existing assets, while never withdrawing spawn reserves.
-    const stores = room.find(FIND_STRUCTURES).filter((s): s is StructureContainer | StructureStorage =>
-      (s.structureType === STRUCTURE_CONTAINER || s.structureType === STRUCTURE_STORAGE) && s.store.getUsedCapacity(RESOURCE_ENERGY) >= 50);
+    // storage 保底(M6-1):升级护卫的产业性收集不抽保底——降级紧急(<3000,
+    // 房间存亡)除外。容器不受限。
+    const stores = room.find(FIND_STRUCTURES).filter((s): s is StructureContainer | StructureStorage => {
+      if (s.structureType === STRUCTURE_CONTAINER) return s.store.getUsedCapacity(RESOURCE_ENERGY) >= 50;
+      if (s.structureType !== STRUCTURE_STORAGE) return false;
+      const downgrade = room.controller?.ticksToDowngrade ?? Infinity;
+      return downgrade < 3000 || s.store.getUsedCapacity(RESOURCE_ENERGY) > STORAGE_RESERVE_FLOOR;
+    });
     const store = creep.pos.findClosestByRange(stores);
     if (store && creep.pos.getRangeTo(store) <= 5) {
       if (creep.withdraw(store, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) move(creep, store.pos, 1);
