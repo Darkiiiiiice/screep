@@ -1,10 +1,10 @@
 import { energyBudget, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
 import { validatePolicy, type Capabilities } from '../domain/config';
-import { claimerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
+import { claimerSpawnNeed, colonizerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { runLogistics, runMiners } from './logistics';
 import { runDefense } from './defense';
 import { flushTraffic, requestMove } from './traffic';
-import { driveClaimers, driveRemoteMining, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
+import { driveClaimers, driveColonizers, driveRemoteMining, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
 
 interface WorkerState {
   phase: 'collect' | 'deliver';
@@ -221,6 +221,14 @@ export function runBootstrap(): void {
                   const rHaulerTarget = remoteHaulerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
                     energyAvailable: room.energyAvailable, haulers: remoteHaulers, miners: remoteMiners, me: idle.owner.username, now: Game.time });
                   if (rHaulerTarget) idle.spawnCreep([CARRY, CARRY, CARRY, CARRY, MOVE, MOVE, MOVE, MOVE], `rhauler-${room.name}-${Game.time}`, { memory: { role: 'remoteHauler', remoteTarget: rHaulerTarget, home: room.name } });
+                  else {
+                    // 殖民者:第四顺位盈余(M5)。GCL 空额是硬闸——名额不足时
+                    // 不浪费派兵(验收原文);线上 GCL1 期间此门恒关,属设计行为。
+                    const colonizeTarget = colonizerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
+                      energyAvailable: room.energyAvailable, colonizerAlive: Object.values(Game.creeps).some(c => c.memory.role === 'colonizer'),
+                      gclFreeSlots: Game.gcl.level - Object.values(Game.rooms).filter(r => r.controller?.my).length, now: Game.time });
+                    if (colonizeTarget) idle.spawnCreep([CLAIM, MOVE], `colonizer-${room.name}-${Game.time}`, { memory: { role: 'colonizer', colonizeTarget, home: room.name } });
+                  }
                 }
               }
           }
@@ -246,6 +254,7 @@ export function runBootstrap(): void {
   }
   isolate(state, 'intel', () => driveScouts(policy.policy.allies, executionLimit));
   isolate(state, 'claim', () => driveClaimers(policy.policy.allies, executionLimit));
+  isolate(state, 'colonize', () => driveColonizers(policy.policy.allies, executionLimit));
   isolate(state, 'remote', () => driveRemoteMining(executionLimit));
   state.rooms = { ...state.rooms, ...activeRooms };
   for (const name of Object.keys(state.rooms)) {

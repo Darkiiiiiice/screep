@@ -48,6 +48,12 @@ export interface IntelMemory {
  evaluation?: { tick: number; targets: { name: string; score: number; sources: number; distance: number }[] };
  /** 殖民目标评分快照(M5,与远矿同节奏产出;空榜 = 情报范围内暂无可占房)。 */
  colonization?: { tick: number; targets: RemoteCandidate[] };
+ /** 在飞殖民者名(失踪判定用,M5)。 */
+ colonizerActive?: string;
+ /** 最近一次殖民者死亡的 tick(M5 死亡冷却)。 */
+ lastColonizerDeathAt?: number;
+ /** 已占领殖民地台账:房名 → 占领时刻(M5-3 启动队消费)。 */
+ colonies?: Record<string, { claimedAt: number }>;
  /** home→各房跳数缓存(路由静态,不随时间失效)。 */
  distances?: Record<string, number>;
 }
@@ -211,6 +217,42 @@ export function evaluateColonizeTargets(args: { rooms: Record<string, RoomIntel>
     candidates.push({ name, score: intel.sources.length * 100 - distance * 10, sources: intel.sources.length, distance });
   }
   return candidates.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).slice(0, EVAL_TOP);
+}
+
+/** 殖民者身体 [CLAIM, MOVE] 造价(与预定者同构,任务是一次性 claim)。 */
+export const COLONIZER_BODY_COST = 650;
+/** 与预定者同地板:殖民是满员工人口粮外的盈余支出。 */
+export const COLONIZER_WORKER_FLOOR = 4;
+/** 殖民者死亡冷却(§1 失败有界):须远小于 CLAIM 件寿命 600,同预定者教训。 */
+export const COLONIZER_DEATH_COOLDOWN = 150;
+
+/**
+ * 殖民者孵化决策(M5,纯):五重门——
+ * **GCL 空额**(gclFreeSlots≤0 直接拒:名额不足时不浪费派兵,验收原文;
+ * 线上实证 2026-09-20 GCL1=99126 分,下一名额在 1e6)/容量/全额 650/
+ * 工人地板 4/无在飞(占领是一次性事件,不搞重叠交接)+ 死亡冷却。
+ * 目标锁殖民榜榜首且情报须新鲜:过期情报不派兵(§3.6 失去视野≠安全)。
+ * 返回目标房名或 null。
+ */
+export function colonizerSpawnNeed(args: {
+  intel: IntelMemory;
+  workers: number;
+  capacity: number;
+  energyAvailable: number;
+  colonizerAlive: boolean;
+  gclFreeSlots: number;
+  now: number;
+}): string | null {
+  if (args.gclFreeSlots <= 0) return null;
+  if (args.capacity < COLONIZER_BODY_COST || args.energyAvailable < COLONIZER_BODY_COST) return null;
+  if (args.workers < COLONIZER_WORKER_FLOOR) return null;
+  if (args.colonizerAlive) return null;
+  if (args.intel.lastColonizerDeathAt !== undefined && args.now - args.intel.lastColonizerDeathAt < COLONIZER_DEATH_COOLDOWN) return null;
+  const target = args.intel.colonization?.targets[0]?.name;
+  if (!target) return null;
+  const room = args.intel.rooms[target];
+  if (!room || isStale(room, args.now)) return null;
+  return target;
 }
 
 /** 预定者身体 [CLAIM, MOVE] 造价。 */

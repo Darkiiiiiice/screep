@@ -30,6 +30,7 @@ const intelProbe = args.includes('--intel-probe');
 const minersProbe = args.includes('--miners-probe');
 const claimProbe = args.includes('--claim-probe');
 const remoteProbe = args.includes('--remote-probe');
+const colonizeProbe = args.includes('--colonize-probe');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -42,7 +43,8 @@ assert(!intelProbe || lifecycle && logistics && !construction && !fairnessProbe 
 assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe, '--miners-probe requires --lifecycle --logistics');
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
 assert(!remoteProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--remote-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+assert(!colonizeProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe && !remoteProbe, '--colonize-probe requires --lifecycle --logistics');
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 1200 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -134,7 +136,8 @@ try {
     }
     traffic.flushTraffic(a.room);
   };`;
-  bot = await server.world.addBot({ username: 'M0', room: fixture.room, x: fixture.spawn[0], y: fixture.spawn[1], modules: trafficRecovery ? { main: trafficRecoveryMain, traffic: trafficBundle } : trafficProbe ? { main: trafficMain, traffic: trafficBundle } : fairnessProbe ? { main: bundle } : lifecycle ? { main: bundle } : { main: probe, app: 'module.exports.loop = function() {}' } });
+  // colonize-probe 需要 GCL2(1e6 分起)才有第二房占领名额;gcl 字段是点数不是等级。
+  bot = await server.world.addBot({ username: 'M0', room: fixture.room, x: fixture.spawn[0], y: fixture.spawn[1], ...(colonizeProbe ? { gcl: 2e6 } : {}), modules: trafficRecovery ? { main: trafficRecoveryMain, traffic: trafficBundle } : trafficProbe ? { main: trafficMain, traffic: trafficBundle } : fairnessProbe ? { main: bundle } : lifecycle ? { main: bundle } : { main: probe, app: 'module.exports.loop = function() {}' } });
   if (trafficProbe || trafficRecovery) report.trafficBundleHash = createHash('sha256').update(trafficBundle).digest('hex');
   bot.on('console', (logs) => report.logs.push(...logs));
   const { db, env } = server.common.storage;
@@ -309,6 +312,53 @@ try {
     // 情报里的源坐标写真实坐标:矿工按 sources[0] 直奔源点。
     await env.set(env.keys.MEMORY + bot.id, JSON.stringify({ logisticsEnabled: true, intel: { schema: 1, rooms: { W0N2: { observedAt: 1, sources: fixture.sources.map(([x, y], i) => ({ id: `seeded-${i}`, x, y })), threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'M0', reservationTicks: 4000 } } }, distances: { W0N2: 1 } } }));
     report.remote = { room: 'W0N2' };
+  }
+  if (colonizeProbe) {
+    // 殖民者切片:claim 同款经济底座(RCL3+8 满能 ext+6 工人);W0N2 预置
+    // 我方富预定(引擎对象+情报双写,4000≥刷新线)→ 预定者让位;自留预定
+    // 不挡殖民榜,M5 门禁锁定榜首。GCL2 由 addBot 注入(2e6 分)。
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 3, progress: 0 } });
+    for (const [x, y] of [[24, 23], [26, 23], [23, 26], [27, 24], [24, 27], [22, 25], [26, 22], [23, 24]]) {
+      await server.world.addRoomObject(fixture.room, 'extension', x, y, { user: bot.id, store: { energy: 50 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
+    }
+    for (const [i, [x, y]] of [[20, 20], [22, 22], [28, 28], [24, 20], [20, 24], [28, 24]].entries()) {
+      await server.world.addRoomObject(fixture.room, 'creep', x, y, {
+        user: bot.id, name: `worker-seeded-${i}`, body: [{ type: 'work', hits: 100 }, { type: 'carry', hits: 100 }, { type: 'move', hits: 100 }],
+        hits: 300, hitsMax: 300, store: { energy: 0 }, storeCapacity: 50, fatigue: 0, spawning: false, ageTime: 1501, actionLog: {},
+      });
+    }
+    const ring = ['W1N1', 'W1N0', 'W1N2', 'W0N0', 'W0N2', 'E0N1', 'E0N0', 'E0N2'];
+    for (const name of ring) {
+      await server.world.addRoom(name);
+      await server.world.setTerrain(name, new TerrainMatrix());
+    }
+    await server.world.addRoomObject('W0N2', 'controller', 10, 12, { level: 0, reservation: { user: bot.id, endTime: 100000 } });
+    for (const [x, y] of fixture.sources) {
+      await server.world.addRoomObject('W0N2', 'source', x, y, { energy: 3000, energyCapacity: 3000, nextRegenerationTime: 301 });
+    }
+    // 封死施工排水口(remote 探针同款教训):双容器+塔预置(RCL3 塔上限 1)→
+    // 无工地,盈余才攒得到 650;否则工地把能量钉死在低位,colonizer 永不上场。
+    for (const [sx, sy] of fixture.sources) {
+      await server.world.addRoomObject(fixture.room, 'container', sx + 1, sy, { store: { energy: 1500 }, storeCapacity: 2000, hits: 250000, hitsMax: 250000, nextDecayTime: 100000 });
+    }
+    await server.world.addRoomObject(fixture.room, 'tower', 24, 25, { user: bot.id, store: { energy: 1000 }, storeCapacityResource: { energy: 1000 }, hits: 3000, hitsMax: 3000 });
+    // 预置满编远程机组(矿工蹲 W0N2 源点+3 搬运工)→ 机组门禁全满,colonizer
+    // 是 650 的唯一竞争者。否则第四顺位排在机组(550+400×3)之后,孵化时刻
+    // 被 mock CPU 混沌放大漂移(矩阵负载下实测认领落点 805→870),窗口变剃刀。
+    await server.world.addRoomObject('W0N2', 'creep', fixture.sources[0][0] + 1, fixture.sources[0][1], {
+      user: bot.id, name: 'rminer-seeded', body: [...Array(5).fill({ type: 'work', hits: 100 }), { type: 'carry', hits: 100 }, { type: 'move', hits: 100 }],
+      hits: 700, hitsMax: 700, store: { energy: 0 }, storeCapacity: 50, fatigue: 0, spawning: false, ageTime: 1500, actionLog: {},
+    });
+    for (const [i, [x, y]] of [[22, 22], [28, 28], [24, 20]].entries()) {
+      await server.world.addRoomObject(fixture.room, 'creep', x, y, {
+        user: bot.id, name: `rhauler-seeded-${i}`, body: [...Array(4).fill({ type: 'carry', hits: 100 }), ...Array(4).fill({ type: 'move', hits: 100 })],
+        hits: 800, hitsMax: 800, store: { energy: 0 }, storeCapacity: 200, fatigue: 0, spawning: false, ageTime: 1500, actionLog: {},
+      });
+    }
+    // 情报/跳数预种子:殖民榜首评估即锁定 W0N2(自留预定 4000 让预定者让位);
+    // 机组 creep 须有 memory 登记——门禁按 Game.creeps 的 memory.role 计数。
+    await env.set(env.keys.MEMORY + bot.id, JSON.stringify({ logisticsEnabled: true, creeps: { 'rminer-seeded': { role: 'remoteMiner', remoteTarget: 'W0N2', home: fixture.room }, 'rhauler-seeded-0': { role: 'remoteHauler', remoteTarget: 'W0N2', home: fixture.room }, 'rhauler-seeded-1': { role: 'remoteHauler', remoteTarget: 'W0N2', home: fixture.room }, 'rhauler-seeded-2': { role: 'remoteHauler', remoteTarget: 'W0N2', home: fixture.room } }, intel: { schema: 1, rooms: { W0N2: { observedAt: 1, sources: fixture.sources.map(([x, y], i) => ({ id: `seeded-${i}`, x, y })), threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'M0', reservationTicks: 4000 } } }, distances: { W0N2: 1 } } }));
+    report.colonize = { room: 'W0N2' };
   }
   if (fairnessProbe) {
     await server.world.addRoomObject(fixture.room, 'extension', 26, 25, { user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000 });
@@ -640,6 +690,20 @@ try {
         report.ticks.some(t => t.objects.some(o => o.type === 'creep' && o.name?.startsWith('rhauler-') && (o.store?.energy ?? 0) > 0)));
       check('remote crew delivered energy into the home economy',
         (lastMem.intel?.remoteDelivered ?? 0) > 0);
+    }
+    if (colonizeProbe) {
+      const lastMem = report.ticks.at(-1).memory;
+      // 出生证据走 memory(跨房单位,快照点读掷硬币——台账同款教训)。
+      check('colonizer spawned for the colonize target',
+        report.ticks.some(t => Object.keys(t.memory.creeps ?? {}).some(n => n.startsWith('colonizer-'))));
+      // 占领落地以重观测回写的归属为准;台账 colonies 是 M5-3 启动队的令箭。
+      const rooms = lastMem.intel?.rooms ?? {};
+      check('colonizer entered the target room and refreshed intel',
+        (rooms.W0N2?.observedAt ?? 1) > 1);
+      check('target controller claimed and observed as owned',
+        rooms.W0N2?.controller?.owner === 'M0');
+      check('colony ledger recorded the claim',
+        typeof lastMem.intel?.colonies?.W0N2?.claimedAt === 'number');
     }
     if (intelProbe) {
       const rooms = report.ticks.at(-1).memory.intel?.rooms ?? {};

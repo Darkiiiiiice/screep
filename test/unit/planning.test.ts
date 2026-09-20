@@ -78,7 +78,8 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
   wallMask = walls;
   const spawn = { id: 'spawn-id', structureType: 'spawn', pos: new Position(25, 25), store: { getFreeCapacity: () => spawnFree } };
   const owned = Array.from({ length: extensions }, (_, i) => ({ id: `ext-${i}`, structureType: 'extension', pos: new Position(20 + i, 20), store: { getFreeCapacity: () => 0 } }));
-  const createConstructionSite = vi.fn(() => 0);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 形参为 mock.calls 断言提供元组类型
+  const createConstructionSite = vi.fn((_x: number, _y: number, _type: string) => 0);
   vi.stubGlobal('Game', { time: 1000, creeps: {} });
   vi.stubGlobal('RoomPosition', Position);
   vi.stubGlobal('Memory', {});

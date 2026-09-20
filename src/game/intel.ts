@@ -42,6 +42,8 @@ declare global {
     claimTarget?: string;
     /** 远程机组目标房名(§3.9 DEPLOY)。 */
     remoteTarget?: string;
+    /** 殖民者目标房名(M5)。 */
+    colonizeTarget?: string;
   }
 }
 
@@ -249,6 +251,62 @@ export function driveClaimers(allies: readonly string[], cpuLimit: number): void
     if (Number.isFinite(born)) intel.lastClaimerDeathAge = Game.time - born;
     intel.lastClaimerDeathAt = Game.time;
     delete intel.claimerActive;
+  }
+}
+
+/**
+ * 每 tick 驱动殖民者(M5):跨房导航与预定者同式;在目标房顺手重观测。
+ * 退役判据:目标被他人占领/生效外援预定/武装威胁/情报过期(与殖民榜同口径,
+ * 余量按情报年龄折算)。占领成功即记殖民台账并退役——任务是一次性的,
+ * 活着只会占住 colonizerAlive 门。
+ */
+export function driveColonizers(allies: readonly string[], cpuLimit: number): void {
+  const intel = intelState();
+  for (const creep of Object.values(Game.creeps)) {
+    const mem = creep.memory;
+    if (mem.role !== 'colonizer' || creep.spawning) continue;
+    if (Game.cpu.getUsed() >= cpuLimit) break;
+    const target = mem.colonizeTarget;
+    const room = target ? intel.rooms[target] : undefined;
+    const controller = room?.controller;
+    const foreignReservation = controller !== undefined && controller.reserver !== undefined && controller.reserver !== creep.owner.username
+      && (controller.reservationTicks ?? 0) - Math.max(0, Game.time - room!.observedAt) > 0;
+    const invalid = !target || !room || isStale(room, Game.time)
+      || room.threat.armed > 0
+      || (controller?.owner !== undefined && controller.owner !== creep.owner.username)
+      || foreignReservation;
+    if (invalid) {
+      creep.suicide();
+      continue;
+    }
+    if (creep.room.name !== target) {
+      try {
+        creep.moveTo(new RoomPosition(25, 25, target), { range: 22, reusePath: 20 });
+      } catch {
+        markUnreachable(intel, target, Game.time);
+        creep.suicide();
+      }
+      continue;
+    }
+    intel.rooms[target] = observeRoom(creep.room, allies);
+    const live = creep.room.controller;
+    if (!live) continue;
+    if (live.my) {
+      // 占领落地:台账记账,任务完成退役(M5-3 启动队以 colonies 为令箭)。
+      (intel.colonies ??= {})[target] = { claimedAt: Game.time };
+      creep.suicide();
+      continue;
+    }
+    if (creep.pos.isNearTo(live)) creep.claimController(live);
+    else creep.moveTo(live);
+  }
+  // 死亡对账与预定者同款:有任何在册即移交指针,全员尽没才记死亡冷却。
+  const active = Object.values(Game.creeps).find(c => c.memory.role === 'colonizer');
+  if (active) {
+    intel.colonizerActive = active.name;
+  } else if (intel.colonizerActive && !Object.values(Game.creeps).some(c => c.name === intel.colonizerActive)) {
+    intel.lastColonizerDeathAt = Game.time;
+    delete intel.colonizerActive;
   }
 }
 

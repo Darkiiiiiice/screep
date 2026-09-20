@@ -5,6 +5,7 @@ import {
   claimerSpawnNeed,
   remoteHaulerSpawnNeed,
   remoteMinerSpawnNeed,
+  colonizerSpawnNeed,
   evaluateColonizeTargets,
   evaluateRemoteTargets,
   INTEL_STALE,
@@ -186,6 +187,33 @@ it('unlocks a colonize target when the foreign reservation has decayed past zero
   expect(evaluateColonizeTargets({ rooms, distances: { contested: 1 }, me: 'me', now: 1200 }).map(t => t.name)).toEqual(['contested']);
 });
 
+
+it('spawns a colonizer only with a free GCL slot and full surplus against the top colonize target', () => {
+  const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
+    schema: 1,
+    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0 } } },
+    colonization: { tick: 1000, targets: [{ name: 'W0N2', score: 90, sources: 1, distance: 1 }] },
+    ...over,
+  });
+  const base = { intel: intel(), workers: 6, capacity: 800, energyAvailable: 650, colonizerAlive: false, gclFreeSlots: 1, now: 1200 };
+  expect(colonizerSpawnNeed(base)).toBe('W0N2');
+  // GCL 空额是硬闸:名额不足时不浪费派兵(验收原文;线上 GCL1 期间恒关)。
+  expect(colonizerSpawnNeed({ ...base, gclFreeSlots: 0 })).toBeNull();
+  expect(colonizerSpawnNeed({ ...base, capacity: 649 })).toBeNull();
+  expect(colonizerSpawnNeed({ ...base, energyAvailable: 649 })).toBeNull();
+  expect(colonizerSpawnNeed({ ...base, workers: 3 })).toBeNull();
+  expect(colonizerSpawnNeed({ ...base, colonizerAlive: true })).toBeNull();
+  // 死亡冷却 150(与预定者同源:须远小于 CLAIM 件寿命 600)。
+  expect(colonizerSpawnNeed({ ...base, intel: intel({ lastColonizerDeathAt: 1100 }) })).toBeNull();
+  expect(colonizerSpawnNeed({ ...base, intel: intel({ lastColonizerDeathAt: 1050 }) })).toBe('W0N2');
+  // 无榜/目标情报过期不派兵(§3.6 失去视野≠安全)。
+  const noBoard = intel();
+  delete noBoard.colonization;
+  expect(colonizerSpawnNeed({ ...base, intel: noBoard })).toBeNull();
+  const staleTarget = intel();
+  staleTarget.rooms.W0N2!.observedAt = 1200 - INTEL_STALE;
+  expect(colonizerSpawnNeed({ ...base, intel: staleTarget })).toBeNull();
+});
 it('spawns a claimer only on full surplus against the top evaluated target needing reservation', () => {
   const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
     schema: 1,
