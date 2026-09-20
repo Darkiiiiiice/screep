@@ -653,6 +653,16 @@ try {
         evaluation?.targets?.[0]?.name === 'W0N2' && evaluation.targets[0].sources === 2 && evaluation.targets[0].distance === 1);
       check('evaluation board carries no barren rooms',
         (evaluation?.targets ?? []).every(t => (rooms[t.name]?.sources ?? []).length > 0));
+      // M5 殖民榜(同节奏产出):无主无预定房应登顶;榜上任何房间都不得
+      // 有归属或生效中的外援预定(殖民过滤口径,比远矿更严)。
+      const colonization = report.ticks.at(-1).memory.intel?.colonization;
+      check('colonization board selects the claimable neutral room',
+        colonization?.targets?.[0]?.name === 'W0N2' && colonization.targets[0].sources === 2);
+      check('colonization board carries no owned or foreign-reserved rooms',
+        (colonization?.targets ?? []).every(t => {
+          const c = rooms[t.name]?.controller;
+          return c && c.owner === undefined && (c.reserver === undefined || c.reserver === 'M0');
+        }));
     }
     report.lifecycle = { births, delivered, maxEmptyRun, maxControllerIdle };
     if (logistics) check('controller service resumes within 400 ticks with three workers', maxControllerIdle <= 400);

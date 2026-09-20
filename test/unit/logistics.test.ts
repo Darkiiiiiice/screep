@@ -179,7 +179,7 @@ it('lease-held progress refreshes the clock and releases without reappointing in
     controller: { my: true, ticksToDowngrade: 20000, progress: 201, level: 3, pos: new Position(30, 30, 'W0N1') },
     find: () => [],
   };
-  const handled = runLogistics(room as unknown as Room, creeps as unknown as Creep[], [], {});
+  runLogistics(room as unknown as Room, creeps as unknown as Creep[], [], {});
   expect(memory.controllerService!.W0N1!.lastProgress).toBe(now);
   expect(memory.controllerService!.W0N1!.worker).toBeUndefined();
   // The old `handled.size === 0` assertion pinned the pre-surplus-duty idle

@@ -5,6 +5,7 @@ import {
   claimerSpawnNeed,
   remoteHaulerSpawnNeed,
   remoteMinerSpawnNeed,
+  evaluateColonizeTargets,
   evaluateRemoteTargets,
   INTEL_STALE,
   UNREACHABLE_TTL,
@@ -151,6 +152,38 @@ it('keeps self-reserved rooms on the board for the DEPLOY step', () => {
 it('returns an empty board when no room qualifies', () => {
   const rooms: Record<string, RoomIntel> = { hostile: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0 } } };
   expect(evaluateRemoteTargets({ rooms, distances: { hostile: 1 }, me: 'me', now: 1200 })).toEqual([]);
+});
+
+
+it('ranks only claimable rooms for colonization: unowned, no live foreign reservation', () => {
+  const room = (over: Partial<RoomIntel> = {}): RoomIntel => ({ observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0 }, ...over });
+  const twoSources = room({ sources: [{ id: 's1', x: 1, y: 1 }, { id: 's2', x: 2, y: 2 }] });
+  const rooms: Record<string, RoomIntel> = {
+    open: room(),
+    dual: twoSources,
+    owned: room({ controller: { level: 3, owner: 'someone' } }),
+    mine: room({ controller: { level: 1, owner: 'me' } }),
+    foreignReserved: room({ controller: { level: 0, reserver: 'someone', reservationTicks: 500 } }),
+    selfReserved: room({ controller: { level: 0, reserver: 'me', reservationTicks: 4000 } }),
+    hostile: room({ threat: { hostiles: 1, armed: 1, towers: 0, keeperLairs: 0 } }),
+    noController: (() => { const r = room(); delete r.controller; return r; })(),
+    unrouted: room(),
+  };
+  const distances = { open: 1, dual: 2, owned: 1, mine: 1, foreignReserved: 1, selfReserved: 1, hostile: 1, noController: 1 };
+  const targets = evaluateColonizeTargets({ rooms, distances, me: 'me', now: 1200 });
+  expect(targets.map(t => t.name)).toEqual(['dual', 'open', 'selfReserved']);
+});
+
+it('unlocks a colonize target when the foreign reservation has decayed past zero', () => {
+  // 快照按观测年龄折算:新鲜观测读数 500、已自然衰减 300 → 有效 200 仍锁;
+  // 读数降到 100 → 有效 -200 归零,房间回到可占榜
+  // (与 claimer 门禁同一教训:信快照会睡死决策)。
+  const rooms: Record<string, RoomIntel> = {
+    contested: { observedAt: 900, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'someone', reservationTicks: 500 } },
+  };
+  expect(evaluateColonizeTargets({ rooms, distances: { contested: 1 }, me: 'me', now: 1200 })).toEqual([]);
+  rooms.contested!.controller!.reservationTicks = 100;
+  expect(evaluateColonizeTargets({ rooms, distances: { contested: 1 }, me: 'me', now: 1200 }).map(t => t.name)).toEqual(['contested']);
 });
 
 it('spawns a claimer only on full surplus against the top evaluated target needing reservation', () => {

@@ -380,6 +380,7 @@ flowchart TD
 - [x] M4：盈余升级纵切(线上目击驱动修复)。用户客户端目击"没人升级、工人乱跑"→ 数据坐实:容器 2000 满仓、矿工停工、RCL4 进度 0.018/tick、三工人 stuck 打转。根因:`runLogistics` 收货清单只有 spawn/扩展/塔,控制器不在其列;唯一升级者是防饿死护卫(计时 <6000 或 200 tick 无进度才派一人),盈余全死在缓存里。修复:收货口全满足后无处可去的工人一律升级控制器(油库=容器,与建筑工同式;spawn 饿了下 tick 送货循环自动拉回)。单测三枚按规处理:补 stub API 面(`findClosestByRange`/`ERR_NOT_IN_RANGE`),`upgraded` 精确数组放宽为领头断言,`handled.size===0`(钉"健康房全员闲置"旧世界)删除不重钉。19 场景+88 单测全绿。
 - [x] M4：威胁判据武装化（用户目击驱动）。线上实录：别家无武装斥候路过 W35S1 -> claimer 重观测见 hostiles=1 退役自杀（650/具白烧，已循环两轮）、pioneer 撤离、房间永远锁不住。用户客户端裁定"没有杀手，都是别人的 scout"。三处判据统一为 `armed > 0 || towers > 0`（armed 观测时已含 ATTACK/RANGED/HEAL/WORK/**CLAIM**——抢预留的预定者同样触发）:评估过滤、claimer 退役、pioneer 撤离;reserver 字段独立管预留竞争。盈余升级同步补闸:progression 探针 RCL4 段抓出升级者喝干建筑油（塔 654/5000、storage 0/30000 停工）,有工地时建设优先、升级全面让位。19 场景+89 单测全绿。
 - [x] M4：预定者无缝交接（净收益止血）。线上账本：pioneer 周期上限 ~600 vs 尸体 400 + claimer 650 = 净负；放大器是 claimer 寿终->冷却 500->补孵->飞行的 ~650 tick 预留真空,真空期 pioneer 读到"非我方预定"按规则自尽(`lastPioneerDeath` 实证)。修法:现任 TTL < 200(旅行 150+孵化 6+余量)即放行继任者,预留永不断档;TTL 取全体在飞预定者最大值防交接期重复孵化。19 场景+89 单测全绿。
+- [x] M5：殖民评估纵切（§3.9 EVALUATE 的 M5 第一步，只产决策记录不孵单位）。`evaluateColonizeTargets` 纯决策，过滤比远矿更严：任何归属（敌我）出局、**生效中的外援预定出局**——余量按情报年龄折算、衰减归零即解锁（与 claimer 门禁同一快照教训，线上 W35S1 被 darkiiiiiice 预定 1941+ 即被此条正确锁死）、武装/塔/无源/过期/无路由同远矿口径；我方自留预定不挡（CLAIM 先行正是扩张前奏）。评分沿用 sources×100-distance×10，与远矿榜同节奏（25 tick）驻留 `Memory.intel.colonization`；GCL/CPU 门槛与派兵归 colonizer 纵切。探针：`--intel-probe` 扩 2 断言（无主无预定房登顶殖民榜、榜上无归属/外援预定房）。单测 +2（可占口径表、外援预定衰减解锁）。顺修 HEAD 存量 lint 4 错（logistics/planning 测试未用绑定）。19 场景+94 单测全绿。
 
 ## 6. 自动化验证与发布
 

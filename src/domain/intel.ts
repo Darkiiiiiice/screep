@@ -46,6 +46,8 @@ export interface IntelMemory {
  remoteDelivered?: number;
  /** 远矿目标评分快照(EVALUATE 产出,EVAL_TOP 条)。 */
  evaluation?: { tick: number; targets: { name: string; score: number; sources: number; distance: number }[] };
+ /** 殖民目标评分快照(M5,与远矿同节奏产出;空榜 = 情报范围内暂无可占房)。 */
+ colonization?: { tick: number; targets: RemoteCandidate[] };
  /** home→各房跳数缓存(路由静态,不随时间失效)。 */
  distances?: Record<string, number>;
 }
@@ -176,6 +178,33 @@ export function evaluateRemoteTargets(args: { rooms: Record<string, RoomIntel>; 
     if (intel.threat.armed > 0 || intel.threat.towers > 0) continue;
     if (intel.controller?.owner !== undefined) continue;
     if (intel.controller?.reserver !== undefined && intel.controller.reserver !== args.me && (intel.controller.reservationTicks ?? 0) > 0) continue;
+    if (intel.sources.length === 0) continue;
+    const distance = args.distances[name];
+    if (distance === undefined) continue;
+    candidates.push({ name, score: intel.sources.length * 100 - distance * 10, sources: intel.sources.length, distance });
+  }
+  return candidates.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).slice(0, EVAL_TOP);
+}
+
+/**
+ * 殖民目标评分(M5,纯):比远矿更严——
+ * 有任何归属(owner 不论敌我)出局;任何仍在生效的外援预定出局
+ * (claimController 对有效预定无效;余量按情报年龄折算,衰减归零即解锁,
+ * 与 claimer 门禁同一折算教训);武装/塔/无源/过期/无路由同远矿口径。
+ * 我方自己的预定不挡(自占自的预定合法,且 CLAIM 先行正是扩张前奏)。
+ * 评分与远矿同刻度;本函数只产决策记录,孵化门槛(GCL/CPU)在 colonizer 门禁。
+ */
+export function evaluateColonizeTargets(args: { rooms: Record<string, RoomIntel>; distances: Record<string, number>; me: string; now: number }): RemoteCandidate[] {
+  const candidates: RemoteCandidate[] = [];
+  for (const [name, intel] of Object.entries(args.rooms)) {
+    if (isStale(intel, args.now)) continue;
+    if (intel.threat.armed > 0 || intel.threat.towers > 0) continue;
+    const controller = intel.controller;
+    if (!controller || controller.owner !== undefined) continue;
+    if (controller.reserver !== undefined && controller.reserver !== args.me) {
+      const effectiveTicks = (controller.reservationTicks ?? 0) - Math.max(0, args.now - intel.observedAt);
+      if (effectiveTicks > 0) continue;
+    }
     if (intel.sources.length === 0) continue;
     const distance = args.distances[name];
     if (distance === undefined) continue;

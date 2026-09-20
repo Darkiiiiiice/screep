@@ -14,6 +14,7 @@
  */
 import {
   INTEL_CAP,
+  evaluateColonizeTargets,
   evaluateRemoteTargets,
   isReachable,
   isStale,
@@ -194,6 +195,9 @@ export function runEvaluation(home: string): void {
   const me = Game.rooms[home]?.controller?.owner?.username;
   if (!me) return;
   intel.evaluation = { tick: Game.time, targets: evaluateRemoteTargets({ rooms: intel.rooms, distances, me, now: Game.time }) };
+  // M5:同节奏产殖民榜——纯决策记录,不孵单位;空榜如实驻留(§1 失败有界,
+  // 无可占目标时 colonizer 门禁自然无目标可锁)。
+  intel.colonization = { tick: Game.time, targets: evaluateColonizeTargets({ rooms: intel.rooms, distances, me, now: Game.time }) };
 }
 
 /**
