@@ -71,6 +71,10 @@ function engineStub(containers: unknown[], sites: unknown[] = []) {
   vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
   vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
   vi.stubGlobal('STRUCTURE_LINK', 'link');
+  vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
+  vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
+  vi.stubGlobal('FIND_MINERALS', 4);
+  vi.stubGlobal('StructureExtractor', class {});
   vi.stubGlobal('STRUCTURE_TOWER', 'tower');
   vi.stubGlobal('STRUCTURE_STORAGE', 'storage');
   vi.stubGlobal('FIND_STRUCTURES', 1);

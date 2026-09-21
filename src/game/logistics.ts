@@ -4,7 +4,7 @@ import { rankServices, settleService, type ServiceState } from '../domain/servic
 import { REPAIR_THRESHOLD, selectRepairTarget } from '../domain/maintenance';
 import { type TrafficState } from '../domain/traffic';
 import { requestMove as travel } from './traffic';
-import { extensionTiles, preservesConnectivity, linkSite } from '../domain/planning';
+import { extensionTiles, extractorSite, linkSite, preservesConnectivity, terminalSite } from '../domain/planning';
 
 declare global {
   interface CreepMemory {
@@ -196,6 +196,12 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   const linkCap = CONTROLLER_STRUCTURES[STRUCTURE_LINK]?.[rcl] ?? 0;
   const linkOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_LINK).length;
   const linkPlanned = allSites.filter(s => s.structureType === STRUCTURE_LINK).length;
+  const terminalCap = CONTROLLER_STRUCTURES[STRUCTURE_TERMINAL]?.[rcl] ?? 0;
+  const terminalOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_TERMINAL).length;
+  const terminalPlanned = allSites.filter(s => s.structureType === STRUCTURE_TERMINAL).length;
+  const extractorCap = CONTROLLER_STRUCTURES[STRUCTURE_EXTRACTOR]?.[rcl] ?? 0;
+  const extractorOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_EXTRACTOR).length;
+  const extractorPlanned = allSites.filter(s => s.structureType === STRUCTURE_EXTRACTOR).length;
   // Stage order: extensions to the base economy (5) → tower (defense) → storage
   // (RCL4 buffer). Placement keys on OWNED progress; a tower that exists as a
   // site unlocks storage, and once the tower is owned or placed the extension
@@ -208,42 +214,64 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     : towerCap - towerOwned - towerPlanned > 0 ? STRUCTURE_TOWER
     : (towerOwned + towerPlanned > 0) && storageCap - storageOwned - storagePlanned > 0 ? STRUCTURE_STORAGE
     : (towerOwned + towerPlanned > 0) && linkCap - linkOwned - linkPlanned > 0 ? STRUCTURE_LINK
+    : (towerOwned + towerPlanned > 0) && terminalCap - terminalOwned - terminalPlanned > 0 && storageOwned > 0 ? STRUCTURE_TERMINAL
+    : (towerOwned + towerPlanned > 0) && extractorCap - extractorOwned - extractorPlanned > 0 ? STRUCTURE_EXTRACTOR
     : (towerOwned + towerPlanned > 0) && extensionCap - extensionOwned - extensionPlanned > 0 && extensionPlanned < 3 ? STRUCTURE_EXTENSION
       : undefined;
   const growthOwned = growthType === STRUCTURE_EXTENSION ? extensionOwned
-    : growthType === STRUCTURE_TOWER ? towerOwned : growthType === STRUCTURE_LINK ? linkOwned : storageOwned;
+    : growthType === STRUCTURE_TOWER ? towerOwned : growthType === STRUCTURE_LINK ? linkOwned
+    : growthType === STRUCTURE_TERMINAL ? terminalOwned : growthType === STRUCTURE_EXTRACTOR ? extractorOwned : storageOwned;
   const growthPlanned = growthType === STRUCTURE_EXTENSION ? extensionPlanned
-    : growthType === STRUCTURE_TOWER ? towerPlanned : growthType === STRUCTURE_LINK ? linkPlanned : storagePlanned;
+    : growthType === STRUCTURE_TOWER ? towerPlanned : growthType === STRUCTURE_LINK ? linkPlanned
+    : growthType === STRUCTURE_TERMINAL ? terminalPlanned : growthType === STRUCTURE_EXTRACTOR ? extractorPlanned : storagePlanned;
   const growthCap = growthType === STRUCTURE_EXTENSION ? extensionCap
-    : growthType === STRUCTURE_TOWER ? towerCap : growthType === STRUCTURE_LINK ? linkCap : storageCap;
+    : growthType === STRUCTURE_TOWER ? towerCap : growthType === STRUCTURE_LINK ? linkCap
+    : growthType === STRUCTURE_TERMINAL ? terminalCap : growthType === STRUCTURE_EXTRACTOR ? extractorCap : storageCap;
   if (miningSelfSufficient && growthType && growthCap - growthOwned - growthPlanned > 0 && spawns[0]) {
     const free = (x: number, y: number) => {
       const position = new RoomPosition(x, y, room.name);
       return position.lookFor(LOOK_TERRAIN)[0] !== 'wall'
         && position.lookFor(LOOK_STRUCTURES).length === 0
         && position.lookFor(LOOK_CONSTRUCTION_SITES).length === 0
-        // 源地块不在 LOOK_STRUCTURES:不显式排除,环扫选点会盖住矿头。
-        && !sources.some(src => src.pos.x === x && src.pos.y === y);
+        // 源/矿地块不在 LOOK_STRUCTURES:不显式排除,环扫选点会盖住矿头
+        // (extractor 例外,它只能建在 mineral 上,不走 free)。
+        && !sources.some(src => src.pos.x === x && src.pos.y === y)
+        && !room.find(FIND_MINERALS).some(m => m.pos.x === x && m.pos.y === y);
     };
     const passable = (x: number, y: number) => x >= 0 && x < 50 && y >= 0 && y < 50 && free(x, y);
     // Scan a small candidate window: cut vertices (corridor/pocket entrances)
     // are skipped, then the first surviving tile gets the one site of this tick.
     // link(M6-3)不走 spawn 环——锚点是 source(源链)与 storage(中枢链):
+    // link/terminal 共用锚点表(已建+在建);storage 锚点供中枢链与 terminal。
+    const anchorLinks = [
+      ...room.find(FIND_MY_STRUCTURES).filter((s): s is StructureLink => s.structureType === STRUCTURE_LINK).map(l => ({ x: l.pos.x, y: l.pos.y })),
+      ...allSites.filter(s => s.structureType === STRUCTURE_LINK).map(l => ({ x: l.pos.x, y: l.pos.y })),
+    ];
+    const storageAnchor = (() => {
+      const anchor = room.find(FIND_MY_STRUCTURES).find((s): s is StructureStorage => s.structureType === STRUCTURE_STORAGE);
+      return anchor ? { x: anchor.pos.x, y: anchor.pos.y } : undefined;
+    })();
     if (growthType === STRUCTURE_LINK) {
-      const anchorLinks = [
-        ...room.find(FIND_MY_STRUCTURES).filter((s): s is StructureLink => s.structureType === STRUCTURE_LINK).map(l => ({ x: l.pos.x, y: l.pos.y })),
-        ...allSites.filter(s => s.structureType === STRUCTURE_LINK).map(l => ({ x: l.pos.x, y: l.pos.y })),
-      ];
       const site = linkSite({
         sources: sources.map(src => ({ x: src.pos.x, y: src.pos.y })),
         containers: containers.map(c => ({ x: c.pos.x, y: c.pos.y })),
-        storage: (() => {
-          const anchor = room.find(FIND_MY_STRUCTURES).find((s): s is StructureStorage => s.structureType === STRUCTURE_STORAGE);
-          return anchor ? { x: anchor.pos.x, y: anchor.pos.y } : undefined;
-        })(),
+        storage: storageAnchor,
         links: anchorLinks, capacity: linkCap, free,
       });
       if (site) room.createConstructionSite(site.x, site.y, STRUCTURE_LINK);
+    } else if (growthType === STRUCTURE_TERMINAL) {
+      const site = terminalSite({ storage: storageAnchor, links: anchorLinks, free });
+      // 与扩展环同规:候选不得割裂 storage 周边(连通性守卫)。
+      if (site && preservesConnectivity(site, passable)) room.createConstructionSite(site.x, site.y, STRUCTURE_TERMINAL);
+    } else if (growthType === STRUCTURE_EXTRACTOR) {
+      const site = extractorSite({
+        minerals: room.find(FIND_MINERALS).map(m => ({ x: m.pos.x, y: m.pos.y })),
+        extractors: [
+          ...room.find(FIND_MY_STRUCTURES).filter((s): s is StructureExtractor => s.structureType === STRUCTURE_EXTRACTOR).map(e => ({ x: e.pos.x, y: e.pos.y })),
+          ...allSites.filter(s => s.structureType === STRUCTURE_EXTRACTOR).map(e => ({ x: e.pos.x, y: e.pos.y })),
+        ],
+      });
+      if (site) room.createConstructionSite(site.x, site.y, STRUCTURE_EXTRACTOR);
     } else {
     for (const tile of extensionTiles({ x: spawns[0].pos.x, y: spawns[0].pos.y }, free, 8)) {
       if (!preservesConnectivity(tile, passable)) continue;
@@ -548,5 +576,29 @@ export function runMiners(room: Room, sources: Source[]): void {
       }
     }
     if (container.store.getFreeCapacity(RESOURCE_ENERGY) > 0) miner.harvest(source);
+  }
+}
+
+/**
+ * 采矿区行为(M6-4):站矿体旁挖,满货架直送 terminal。extractor/terminal
+ * 缺位(被打掉)降级为通用工;矿体枯竭(周期再生)则原地待命不降级——
+ * 角色随矿回收,不随矿潮汐。
+ */
+export function runMinerals(room: Room): void {
+  for (const harvester of room.find(FIND_MY_CREEPS)) {
+    if (harvester.memory.role !== 'mharvester' || harvester.spawning) continue;
+    const mineral = room.find(FIND_MINERALS)[0];
+    const extractor = room.find(FIND_MY_STRUCTURES).find(s => s.structureType === STRUCTURE_EXTRACTOR);
+    const terminal = room.find(FIND_MY_STRUCTURES).find(s => s.structureType === STRUCTURE_TERMINAL);
+    if (!mineral || !extractor || !terminal) {
+      harvester.memory.role = 'worker';
+      continue;
+    }
+    if ((harvester.store.getUsedCapacity() ?? 0) > 0) {
+      if (harvester.transfer(terminal, mineral.mineralType) === ERR_NOT_IN_RANGE) travel(harvester, terminal.pos, 1);
+      continue;
+    }
+    if (!harvester.pos.isNearTo(mineral.pos)) { travel(harvester, mineral.pos, 1); continue; }
+    if (harvester.store.getFreeCapacity() > 0) harvester.harvest(mineral);
   }
 }

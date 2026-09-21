@@ -1,4 +1,5 @@
-import { expect, it } from 'vitest';
+import { mharvesterSpawnNeed } from '../../src/domain/bootstrap';
+import { describe, expect, it } from 'vitest';
 import { energyBudget, minerSpawnNeed, populationPlan, retryDelay, trackProgress } from '../../src/domain/bootstrap';
 
 it('recovers with affordable bodies instead of waiting for room maximum', () => {
@@ -40,4 +41,24 @@ it('spawns a dedicated miner only from surplus past the worker floor with a cont
   expect(minerSpawnNeed({ ...base, workerSpawnPending: true })).toBeUndefined();
   expect(minerSpawnNeed({ ...base, sources: sources.map(s => ({ ...s, minerAlive: true })) })).toBeUndefined();
   expect(minerSpawnNeed({ ...base, sources: [{ id: 'a', hasContainer: false, minerAlive: false }] })).toBeUndefined();
+});
+
+describe('mharvester spawn need (M6-4)', () => {
+  const base = {
+    capacity: 800, energyAvailable: 650, workerCount: 4, workerSpawnPending: false,
+    extractorOwned: true, terminalOwned: true, mineralAmount: 50000, harvesterAlive: false,
+  };
+  it('spawns only when extractor, terminal, mineral and floor are all satisfied', () => {
+    expect(mharvesterSpawnNeed(base)).toBe(true);
+    expect(mharvesterSpawnNeed({ ...base, extractorOwned: false })).toBe(false);
+    expect(mharvesterSpawnNeed({ ...base, terminalOwned: false })).toBe(false);
+    expect(mharvesterSpawnNeed({ ...base, mineralAmount: 0 })).toBe(false);
+    expect(mharvesterSpawnNeed({ ...base, harvesterAlive: true })).toBe(false);
+  });
+  it('respects worker floor, capacity and pending-replacement gates', () => {
+    expect(mharvesterSpawnNeed({ ...base, workerCount: 3 })).toBe(false);
+    expect(mharvesterSpawnNeed({ ...base, capacity: 550 })).toBe(false);
+    expect(mharvesterSpawnNeed({ ...base, energyAvailable: 649 })).toBe(false);
+    expect(mharvesterSpawnNeed({ ...base, workerSpawnPending: true })).toBe(false);
+  });
 });

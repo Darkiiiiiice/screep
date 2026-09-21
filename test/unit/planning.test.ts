@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { extensionTiles, linkSite, preservesConnectivity, spawnTile } from '../../src/domain/planning';
+import { extensionTiles, extractorSite, linkSite, preservesConnectivity, spawnTile, terminalSite } from '../../src/domain/planning';
 import { runLogistics } from '../../src/game/logistics';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -101,6 +101,7 @@ class Position {
   findClosestByRange<T>(list: T[]) { return list[0]; }
   isEqualTo(target: Position) { return this.x === target.x && this.y === target.y; }
   isNearTo() { return false; }
+  inRangeTo(target: Position, range: number) { return Math.max(Math.abs(this.x - target.x), Math.abs(this.y - target.y)) <= range; }
   lookFor(type: string) { return type === 'terrain' ? [wallMask[`${this.x}:${this.y}`] ? 'wall' : 'plain'] : []; }
 }
 
@@ -118,6 +119,10 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
   vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
   vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
   vi.stubGlobal('STRUCTURE_LINK', 'link');
+  vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
+  vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
+  vi.stubGlobal('FIND_MINERALS', 4);
+  vi.stubGlobal('StructureExtractor', class {});
   vi.stubGlobal('STRUCTURE_TOWER', 'tower');
   vi.stubGlobal('STRUCTURE_STORAGE', 'storage');
   vi.stubGlobal('FIND_STRUCTURES', 1);
@@ -135,6 +140,9 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
     container: { 1: 5, 2: 5, 3: 5, 4: 5 },
     tower: { 1: 0, 2: 0, 3: 1, 4: 1, 5: 2 },
     storage: { 1: 0, 2: 0, 3: 0, 4: 1 },
+    link: { 5: 2, 6: 3 },
+    terminal: { 6: 1 },
+    extractor: { 6: 1 },
   });
   const room = {
     name: 'W0N1',
@@ -280,5 +288,59 @@ describe('link placement (M6-3)', () => {
       free: (x, y) => !(x >= 8 && x <= 12 && y >= 8 && y <= 12),
     });
     expect(blocked).toBeUndefined();
+  });
+});
+
+describe('terminal placement (M6-4)', () => {
+  const free = (x: number, y: number) => !(x === 24 && y === 22);
+  it('places beside storage, preferring the closest tile', () => {
+    const site = terminalSite({ storage: { x: 24, y: 22 }, links: [], free });
+    expect(site).toBeDefined();
+    const cheb = Math.max(Math.abs(site!.x - 24), Math.abs(site!.y - 22));
+    expect(cheb).toBeLessThanOrEqual(2);
+    expect(site).toEqual({ x: 23, y: 21 });
+  });
+  it('avoids existing links and needs a storage anchor', () => {
+    const blocked = (x: number, y: number) => !(x === 23 && y === 21);
+    const site = terminalSite({ storage: { x: 24, y: 22 }, links: [{ x: 23, y: 21 }], free: blocked });
+    expect(site).toBeDefined();
+    expect(site).not.toEqual({ x: 23, y: 21 });
+    expect(terminalSite({ storage: undefined, links: [], free })).toBeUndefined();
+  });
+});
+
+describe('extractor placement (M6-4)', () => {
+  it('sits on the mineral tile itself and skips covered deposits', () => {
+    const site = extractorSite({ minerals: [{ x: 30, y: 20 }, { x: 10, y: 10 }], extractors: [] });
+    expect(site).toEqual({ x: 10, y: 10 });
+    const covered = extractorSite({ minerals: [{ x: 30, y: 20 }, { x: 10, y: 10 }], extractors: [{ x: 10, y: 10 }, { x: 30, y: 20 }] });
+    expect(covered).toBeUndefined();
+  });
+});
+
+describe('terminal/extractor stage in growth chain (M6-4)', () => {
+  it('places the terminal beside storage once links are saturated at RCL6', () => {
+    // 探针现场复刻:RCL6、storage/3 链在册、双源容器就位、塔+扩展工地在册
+    // (链闸放行),工地占用 storage 周边部分候选格。
+    const cap = { getFreeCapacity: () => 100, getUsedCapacity: () => 0 };
+    const storageOwned = { id: 'st', structureType: 'storage', pos: new Position(24, 22), store: cap };
+    const linkPos = [[15, 14], [23, 21], [35, 34]];
+    const links = linkPos.map(([x, y], i) => ({ id: `l${i}`, structureType: 'link', pos: new Position(x as number, y as number), store: cap }));
+    const towerSites = [siteStub('t1', 'tower'), siteStub('t2', 'tower')];
+    const extSites = [[25, 27], [27, 25], [23, 24]].map((_, i) => siteStub(`e${i}`, 'extension'));
+    const containersOwned = [{ id: 'c1', structureType: 'container', pos: new Position(16, 13), store: cap }, { id: 'c2', structureType: 'container', pos: new Position(36, 34), store: cap }];
+    // stub 的 Position.isNearTo 硬编码 false;这里逐实例放行,表达"容器贴源"。
+    for (const c of containersOwned) (c.pos as Position).isNearTo = () => true;
+    const sources = [{ id: 's1', pos: new Position(15, 13) }, { id: 's2', pos: new Position(35, 34) }];
+    const spawnOwned = { id: 'spawn-id', structureType: 'spawn', pos: new Position(25, 25), store: { getFreeCapacity: () => 10, getUsedCapacity: () => 0 } };
+    const { room, createConstructionSite } = engineStub({ level: 6, extensions: 10, sites: [...towerSites, ...extSites] });
+    (room as { find: (k: number) => unknown[] }).find = (kind: number) =>
+      kind === 1 ? containersOwned : kind === 2 ? [spawnOwned, storageOwned, ...links] : kind === 3 ? [spawnOwned] : [...towerSites, ...extSites];
+    runLogistics(room as unknown as Room, [workerStub('w1', 0)] as unknown as Creep[], sources as unknown as Source[], {});
+    const calls = createConstructionSite.mock.calls.map(c => [c[0], c[1], c[2]]);
+    const terminals = calls.filter(c => c[2] === 'terminal');
+    expect(terminals.length).toBeGreaterThanOrEqual(1);
+    const [x, y] = terminals[0]! as [number, number];
+    expect(Math.max(Math.abs(x - 24), Math.abs(y - 22))).toBeLessThanOrEqual(2);
   });
 });

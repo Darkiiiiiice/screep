@@ -1,9 +1,9 @@
-import { energyBudget, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
+import { energyBudget, mharvesterSpawnNeed, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
 import { validatePolicy, type Capabilities } from '../domain/config';
 import { guardSpawnNeed } from '../domain/combat';
 import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
-import { runLogistics, runMiners } from './logistics';
+import { runLogistics, runMinerals, runMiners } from './logistics';
 import { driveGuards, runDefense } from './defense';
 import { driveLinks } from './links';
 import { flushTraffic, requestMove } from './traffic';
@@ -161,7 +161,7 @@ export function runBootstrap(): void {
       isolate(state, 'links', () => driveLinks(room));
       const sources = room.find(FIND_SOURCES);
       const roomCreeps = room.find(FIND_MY_CREEPS);
-      const creeps = roomCreeps.filter(c => c.memory.role !== 'miner' && c.memory.role !== 'pioneer' && c.getActiveBodyparts(WORK) > 0 && c.getActiveBodyparts(CARRY) > 0 && c.getActiveBodyparts(MOVE) > 0);
+      const creeps = roomCreeps.filter(c => c.memory.role !== 'miner' && c.memory.role !== 'pioneer' && c.memory.role !== 'mharvester' && c.getActiveBodyparts(WORK) > 0 && c.getActiveBodyparts(CARRY) > 0 && c.getActiveBodyparts(MOVE) > 0);
       const miners = roomCreeps.filter(c => c.memory.role === 'miner');
       const spawns = room.find(FIND_MY_SPAWNS);
       const travel = Math.max(10, ...sources.map(s => spawns[0]?.pos.getRangeTo(s) ?? 50)) * 4;
@@ -266,6 +266,20 @@ export function runBootstrap(): void {
                       const pioneerTarget = pioneerSpawnNeed({ intel: intelState(), workers: creeps.length, capacity: room.energyCapacityAvailable,
                         energyAvailable: room.energyAvailable, pioneers: pioneerCounts, me: idle.owner.username, now: Game.time });
                       if (pioneerTarget) idle.spawnCreep([WORK, CARRY, MOVE], `pioneer-${room.name}-${Game.time}`, { memory: { role: 'pioneer', colony: pioneerTarget, home: room.name } });
+                      else {
+                        // 采矿区:第六顺位盈余(M6-4)。extractor+terminal 落成、
+                        // 矿体有存量才开票; minerals 是慢滴流,一具足够。
+                        const mineral = room.find(FIND_MINERALS)[0];
+                        const mNeed = mharvesterSpawnNeed({
+                          capacity: room.energyCapacityAvailable, energyAvailable: room.energyAvailable,
+                          workerCount: creeps.length, workerSpawnPending: spawnWaiting,
+                          extractorOwned: room.find(FIND_MY_STRUCTURES).some(s => s.structureType === STRUCTURE_EXTRACTOR),
+                          terminalOwned: room.find(FIND_MY_STRUCTURES).some(s => s.structureType === STRUCTURE_TERMINAL),
+                          mineralAmount: mineral?.mineralAmount ?? 0,
+                          harvesterAlive: Object.values(Game.creeps).some(c => c.memory.role === 'mharvester'),
+                        });
+                        if (mNeed) idle.spawnCreep([WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], `mharv-${room.name}-${Game.time}`, { memory: { role: 'mharvester' } });
+                      }
                     }
                   }
                 }
@@ -279,6 +293,7 @@ export function runBootstrap(): void {
       isolate(state, 'intel-spawn', () => maybeSpawnScout(room, spawns, plan.spawn || spawnWaiting));
       const handled = Memory.logisticsEnabled === true && !state.degraded ? runLogistics(room, creeps, sources, { spawnWaiting, dedicatedSources: new Set(miners.map(m => m.memory.minerSource).filter((id): id is string => id !== undefined)) }) : new Set<string>();
       if (Memory.logisticsEnabled === true) isolate(state, 'miners', () => runMiners(room, sources));
+      if (Memory.logisticsEnabled === true) isolate(state, 'minerals', () => runMinerals(room));
       isolate(state, 'intel-eval', () => runEvaluation(room.name));
       creeps.sort((a, b) => a.name.localeCompare(b.name));
       for (let j = 0; j < creeps.length; j++) {

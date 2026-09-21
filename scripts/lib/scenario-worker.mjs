@@ -37,8 +37,10 @@ const storageProbe = args.includes('--storage-probe');
 assert(!storageProbe || lifecycle && logistics && !construction && !fairnessProbe, '--storage-probe requires --lifecycle --logistics');
 const linksProbe = args.includes('--links-probe');
 assert(!linksProbe || lifecycle && logistics && !construction && !fairnessProbe, '--links-probe requires --lifecycle --logistics');
+const mineralProbe = args.includes('--mineral-probe');
 const linkplaceProbe = args.includes('--linkplace-probe');
 assert(!linkplaceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--linkplace-probe requires --lifecycle --logistics');
+assert(!mineralProbe || lifecycle && logistics && !construction && !fairnessProbe, '--mineral-probe requires --lifecycle --logistics');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -52,7 +54,7 @@ assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
 assert(!remoteProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--remote-probe requires --lifecycle --logistics');
 assert(!colonizeProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe && !remoteProbe, '--colonize-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : linksProbe ? 600 : linkplaceProbe ? 1500 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : linksProbe ? 600 : linkplaceProbe ? 1500 : mineralProbe ? 2000 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -61,9 +63,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -301,6 +303,30 @@ try {
         user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000,
       });
     }
+  }
+  if (mineralProbe) {
+    // RCL6 + storage 预置(无 terminal/extractor/link):产业线必须自主走完
+    // 链尾三站——link(RCL6 cap 3)→terminal(贴 storage 2 环)→extractor
+    // (落矿体本身);随后 mharvester 自孵(第六顺位盈余),挖矿直送 terminal。
+    // 孵化容量靠预置 10 扩展(300+10×50=800≥650)。
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 6, progress: 0 } });
+    await server.world.addRoomObject(fixture.room, 'storage', 24, 22, {
+      user: bot.id, store: { energy: 2000 }, storeCapacityResource: { energy: 30000 }, hits: 10000, hitsMax: 10000,
+    });
+    for (const [x, y] of fixture.sources) {
+      await server.world.addRoomObject(fixture.room, 'container', x + 1, y, {
+        store: { energy: 0 }, storeCapacity: 2000, hits: 50000, hitsMax: 250000, nextDecayTime: 500,
+      });
+    }
+    for (const [x, y] of [[20, 25], [30, 25], [25, 19], [19, 25], [31, 25], [20, 20], [28, 28], [21, 27], [27, 20], [29, 24]]) {
+      await server.world.addRoomObject(fixture.room, 'extension', x, y, {
+        user: bot.id, store: { energy: 50 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000,
+      });
+    }
+    await server.world.addRoomObject(fixture.room, 'mineral', 30, 20, {
+      mineralType: 'U', mineralAmount: 50000, density: 4,
+    });
+    report.mineral = { mineralAt: [30, 20], storageAt: [24, 22] };
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -542,6 +568,18 @@ try {
       // builders 队列排到窗口外(实证 2026-09-21:30 扩展在场,link 工地
       // 4999/5000 晒到终帧无人问津)。
       const rivals = objs.filter(o => o.type === 'constructionSite' && o.structureType !== 'link').map(o => o._id);
+      if (rivals.length) await db['rooms.objects'].removeWhere({ _id: { $in: rivals } });
+    }
+    if (mineralProbe && i % 25 === 0) {
+      // 同 linkplace 判例:被测设施(link/terminal/extractor)进度折入窗口,
+      // 其余工地清场保 builders 队列;塔工地被反复清→重置 stage,但每窗口
+      // 内 2 塔+3 链+terminal+extractor 的 7 个放置 tick 放得下。
+      const { db } = server.common.storage;
+      const objs = await server.world.roomObjects(fixture.room);
+      for (const site of objs.filter(o => o.type === 'constructionSite' && ['link', 'terminal', 'extractor'].includes(o.structureType))) {
+        await db['rooms.objects'].update({ _id: site._id }, { $set: { progress: (site.progressTotal ?? 5000) - 1 } });
+      }
+      const rivals = objs.filter(o => o.type === 'constructionSite' && !['link', 'terminal', 'extractor'].includes(o.structureType)).map(o => o._id);
       if (rivals.length) await db['rooms.objects'].removeWhere({ _id: { $in: rivals } });
     }
     if (storageProbe && i === 900) {
@@ -929,6 +967,20 @@ try {
       check('hub link anchors beside storage', links.some(l => cheb(l, report.linkplace.storageAt) <= 2));
       check('both links are built and owned', links.length === 2
         && links.every(l => l.store?.energy !== undefined || l.hits !== undefined));
+    }
+    if (mineralProbe) {
+      const last = report.ticks.at(-1).objects;
+      const cheb = (a, b) => Math.max(Math.abs(a.x - b[0]), Math.abs(a.y - b[1]));
+      const terminals = last.filter(o => o.type === 'terminal');
+      const extractors = last.filter(o => o.type === 'extractor');
+      check('terminal placed within two of storage and owned', terminals.length === 1
+        && cheb(terminals[0], report.mineral.storageAt) <= 2 && terminals[0].hits > 0);
+      check('extractor sits on the mineral itself', extractors.length === 1
+        && extractors[0].x === report.mineral.mineralAt[0] && extractors[0].y === report.mineral.mineralAt[1]);
+      const harvesterBorn = report.ticks.some(t => Object.keys(t.memory.creeps ?? {}).some(n => n.startsWith('mharv-')));
+      check('mineral harvester spawns from surplus once both structures stand', harvesterBorn);
+      const harvested = report.ticks.some(t => (t.objects.find(o => o.type === 'terminal')?.store?.U ?? 0) > 0);
+      check('mineral flows from deposit through harvester into terminal', harvested);
     }
     if (linksProbe) {
       const linkAt = (t, [x, y]) => t.objects.find(o => o.type === 'link' && o.x === x && o.y === y)?.store?.energy;

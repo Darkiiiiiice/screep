@@ -156,3 +156,43 @@ export function linkSite(args: {
   }
   return undefined;
 }
+
+/**
+ * terminal 选点(M6-4):贴 storage(2 环)保取送动线;确定性排序(距 storage >
+ * 坐标序);避开既有 link(≤1 环,不再叠产线);源/矿地块由 free 过滤(矿不在
+ * LOOK_STRUCTURES,free 必须显式排除)。cap 由 growth 链把关,这里只管选址。
+ */
+export function terminalSite(args: {
+  storage?: Tile | undefined;
+  links: readonly Tile[];
+  free: (x: number, y: number) => boolean;
+}): Tile | undefined {
+  if (!args.storage) return undefined;
+  const chebyshev = (a: Tile, b: Tile) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  const candidates: Tile[] = [];
+  for (let x = args.storage.x - 2; x <= args.storage.x + 2; x++) {
+    for (let y = args.storage.y - 2; y <= args.storage.y + 2; y++) {
+      if (!args.free(x, y)) continue;
+      const tile = { x, y };
+      if (chebyshev(tile, args.storage) === 0) continue;
+      if (args.links.some(l => chebyshev(l, tile) <= 1)) continue;
+      candidates.push(tile);
+    }
+  }
+  const anchor = args.storage;
+  candidates.sort((a, b) => chebyshev(a, anchor) - chebyshev(b, anchor) || a.x - b.x || a.y - b.y);
+  return candidates[0];
+}
+
+/**
+ * extractor 选点(M6-4):唯一合法位置是矿体地块本身(engine 的
+ * extractor 在 obstacle 表豁免,只能建在 mineral 上);已有 extractor
+ * (在建或建成)覆盖的矿体不再重复。多矿按坐标序取第一个。
+ */
+export function extractorSite(args: {
+  minerals: readonly Tile[];
+  extractors: readonly Tile[];
+}): Tile | undefined {
+  const covered = (t: Tile) => args.extractors.some(e => e.x === t.x && e.y === t.y);
+  return args.minerals.filter(m => !covered(m)).sort((a, b) => a.x - b.x || a.y - b.y)[0];
+}

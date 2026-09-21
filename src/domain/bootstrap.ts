@@ -70,3 +70,21 @@ export function energyBudget(capacity: number, reserve: number, target: number, 
   const floor = Math.min(capacity, Math.max(reserve, replacement));
   return { reserve: floor, target: Math.min(capacity, Math.max(floor, target)) };
 }
+
+/** 采矿区身体:[WORK×4, CARRY×2, MOVE×3]=650——4/tick 采矿,2 格货架直送 terminal。 */
+export const MHARVESTER_BODY_COST = 650;
+
+/**
+ * 采矿区补员决策(纯,第六顺位盈余支出):extractor 与 terminal 都已建成、
+ * 矿体有存量、无在役采矿工时,从盈余能量孵一只。与专职矿工同门:工人
+ * 补员/储备等待优先,工人地板之下不开票(PLAN §3.1 补员优先)。
+ */
+export function mharvesterSpawnNeed(args: {
+  capacity: number; energyAvailable: number; workerCount: number; workerSpawnPending: boolean;
+  extractorOwned: boolean; terminalOwned: boolean; mineralAmount: number; harvesterAlive: boolean;
+}): boolean {
+  if (!args.extractorOwned || !args.terminalOwned || args.mineralAmount <= 0 || args.harvesterAlive) return false;
+  if (args.capacity < MHARVESTER_BODY_COST || args.energyAvailable < MHARVESTER_BODY_COST) return false;
+  if (args.workerCount < MINER_WORKER_FLOOR || args.workerSpawnPending) return false;
+  return true;
+}
