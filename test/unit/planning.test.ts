@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { extensionTiles, extractorSite, linkSite, preservesConnectivity, spawnTile, terminalSite } from '../../src/domain/planning';
+import { extensionTiles, extractorSite, labSite, linkSite, preservesConnectivity, spawnTile, terminalSite } from '../../src/domain/planning';
 import { runLogistics } from '../../src/game/logistics';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -121,6 +121,7 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
   vi.stubGlobal('STRUCTURE_LINK', 'link');
   vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
   vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
+  vi.stubGlobal('STRUCTURE_LAB', 'lab');
   vi.stubGlobal('FIND_MINERALS', 4);
   vi.stubGlobal('StructureExtractor', class {});
   vi.stubGlobal('STRUCTURE_TOWER', 'tower');
@@ -143,6 +144,7 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
     link: { 5: 2, 6: 3 },
     terminal: { 6: 1 },
     extractor: { 6: 1 },
+    lab: { 6: 3 },
   });
   const room = {
     name: 'W0N1',
@@ -342,5 +344,22 @@ describe('terminal/extractor stage in growth chain (M6-4)', () => {
     expect(terminals.length).toBeGreaterThanOrEqual(1);
     const [x, y] = terminals[0]! as [number, number];
     expect(Math.max(Math.abs(x - 24), Math.abs(y - 22))).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('lab placement (M6-5)', () => {
+  const free = () => true;
+  it('clusters labs within two of every existing lab, near the terminal', () => {
+    const first = labSite({ anchor: { x: 23, y: 23 }, labs: [], free });
+    expect(first).toEqual({ x: 22, y: 22 });
+    const second = labSite({ anchor: { x: 23, y: 23 }, labs: [first!], free });
+    expect(Math.max(Math.abs(second!.x - first!.x), Math.abs(second!.y - first!.y))).toBeLessThanOrEqual(2);
+    const third = labSite({ anchor: { x: 23, y: 23 }, labs: [first!, second!], free });
+    for (const lab of [first!, second!]) {
+      expect(Math.max(Math.abs(third!.x - lab.x), Math.abs(third!.y - lab.y))).toBeLessThanOrEqual(2);
+    }
+  });
+  it('needs a terminal anchor', () => {
+    expect(labSite({ anchor: undefined, labs: [], free })).toBeUndefined();
   });
 });

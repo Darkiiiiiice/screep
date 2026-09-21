@@ -4,7 +4,9 @@ import { rankServices, settleService, type ServiceState } from '../domain/servic
 import { REPAIR_THRESHOLD, selectRepairTarget } from '../domain/maintenance';
 import { type TrafficState } from '../domain/traffic';
 import { requestMove as travel } from './traffic';
-import { extensionTiles, extractorSite, linkSite, preservesConnectivity, terminalSite } from '../domain/planning';
+import { extensionTiles, extractorSite, labSite, linkSite, preservesConnectivity, terminalSite } from '../domain/planning';
+import { LAB_INPUT_LACK } from '../domain/labs';
+import { currentRecipe, labMineral, terminalStock } from './labs';
 
 declare global {
   interface CreepMemory {
@@ -202,6 +204,9 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   const extractorCap = CONTROLLER_STRUCTURES[STRUCTURE_EXTRACTOR]?.[rcl] ?? 0;
   const extractorOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_EXTRACTOR).length;
   const extractorPlanned = allSites.filter(s => s.structureType === STRUCTURE_EXTRACTOR).length;
+  const labCap = CONTROLLER_STRUCTURES[STRUCTURE_LAB]?.[rcl] ?? 0;
+  const labOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_LAB).length;
+  const labPlanned = allSites.filter(s => s.structureType === STRUCTURE_LAB).length;
   // Stage order: extensions to the base economy (5) → tower (defense) → storage
   // (RCL4 buffer). Placement keys on OWNED progress; a tower that exists as a
   // site unlocks storage, and once the tower is owned or placed the extension
@@ -216,17 +221,21 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     : (towerOwned + towerPlanned > 0) && linkCap - linkOwned - linkPlanned > 0 ? STRUCTURE_LINK
     : (towerOwned + towerPlanned > 0) && terminalCap - terminalOwned - terminalPlanned > 0 && storageOwned > 0 ? STRUCTURE_TERMINAL
     : (towerOwned + towerPlanned > 0) && extractorCap - extractorOwned - extractorPlanned > 0 ? STRUCTURE_EXTRACTOR
+    : (towerOwned + towerPlanned > 0) && labCap - labOwned - labPlanned > 0 ? STRUCTURE_LAB
     : (towerOwned + towerPlanned > 0) && extensionCap - extensionOwned - extensionPlanned > 0 && extensionPlanned < 3 ? STRUCTURE_EXTENSION
       : undefined;
   const growthOwned = growthType === STRUCTURE_EXTENSION ? extensionOwned
     : growthType === STRUCTURE_TOWER ? towerOwned : growthType === STRUCTURE_LINK ? linkOwned
-    : growthType === STRUCTURE_TERMINAL ? terminalOwned : growthType === STRUCTURE_EXTRACTOR ? extractorOwned : storageOwned;
+    : growthType === STRUCTURE_TERMINAL ? terminalOwned : growthType === STRUCTURE_EXTRACTOR ? extractorOwned
+    : growthType === STRUCTURE_LAB ? labOwned : storageOwned;
   const growthPlanned = growthType === STRUCTURE_EXTENSION ? extensionPlanned
     : growthType === STRUCTURE_TOWER ? towerPlanned : growthType === STRUCTURE_LINK ? linkPlanned
-    : growthType === STRUCTURE_TERMINAL ? terminalPlanned : growthType === STRUCTURE_EXTRACTOR ? extractorPlanned : storagePlanned;
+    : growthType === STRUCTURE_TERMINAL ? terminalPlanned : growthType === STRUCTURE_EXTRACTOR ? extractorPlanned
+    : growthType === STRUCTURE_LAB ? labPlanned : storagePlanned;
   const growthCap = growthType === STRUCTURE_EXTENSION ? extensionCap
     : growthType === STRUCTURE_TOWER ? towerCap : growthType === STRUCTURE_LINK ? linkCap
-    : growthType === STRUCTURE_TERMINAL ? terminalCap : growthType === STRUCTURE_EXTRACTOR ? extractorCap : storageCap;
+    : growthType === STRUCTURE_TERMINAL ? terminalCap : growthType === STRUCTURE_EXTRACTOR ? extractorCap
+    : growthType === STRUCTURE_LAB ? labCap : storageCap;
   if (miningSelfSufficient && growthType && growthCap - growthOwned - growthPlanned > 0 && spawns[0]) {
     const free = (x: number, y: number) => {
       const position = new RoomPosition(x, y, room.name);
@@ -272,6 +281,19 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
         ],
       });
       if (site) room.createConstructionSite(site.x, site.y, STRUCTURE_EXTRACTOR);
+    } else if (growthType === STRUCTURE_LAB) {
+      const site = labSite({
+        anchor: (() => {
+          const anchor = room.find(FIND_MY_STRUCTURES).find((s): s is StructureTerminal => s.structureType === STRUCTURE_TERMINAL);
+          return anchor ? { x: anchor.pos.x, y: anchor.pos.y } : undefined;
+        })(),
+        labs: [
+          ...room.find(FIND_MY_STRUCTURES).filter((s): s is StructureLab => s.structureType === STRUCTURE_LAB).map(l => ({ x: l.pos.x, y: l.pos.y })),
+          ...allSites.filter(s => s.structureType === STRUCTURE_LAB).map(l => ({ x: l.pos.x, y: l.pos.y })),
+        ],
+        free,
+      });
+      if (site && preservesConnectivity(site, passable)) room.createConstructionSite(site.x, site.y, STRUCTURE_LAB);
     } else {
     for (const tile of extensionTiles({ x: spawns[0].pos.x, y: spawns[0].pos.y }, free, 8)) {
       if (!preservesConnectivity(tile, passable)) continue;
@@ -580,25 +602,61 @@ export function runMiners(room: Room, sources: Source[]): void {
 }
 
 /**
- * 采矿区行为(M6-4):站矿体旁挖,满货架直送 terminal。extractor/terminal
- * 缺位(被打掉)降级为通用工;矿体枯竭(周期再生)则原地待命不降级——
- * 角色随矿回收,不随矿潮汐。
+ * 采矿区行为(M6-4/M6-5):站矿体旁挖,满货架直送 terminal;反应配方在炉
+ * 时兼任实验室取送(terminal 取输入 → lab 交料,再回矿)——一具矿物流
+ * 角色覆盖 采→存→配 全链。extractor/terminal 缺位(被打掉)降级为通用工;
+ * 矿体枯竭(周期再生)则原地待命不降级——角色随矿回收,不随矿潮汐。
  */
 export function runMinerals(room: Room): void {
   for (const harvester of room.find(FIND_MY_CREEPS)) {
     if (harvester.memory.role !== 'mharvester' || harvester.spawning) continue;
     const mineral = room.find(FIND_MINERALS)[0];
     const extractor = room.find(FIND_MY_STRUCTURES).find(s => s.structureType === STRUCTURE_EXTRACTOR);
-    const terminal = room.find(FIND_MY_STRUCTURES).find(s => s.structureType === STRUCTURE_TERMINAL);
+    const terminal = room.find(FIND_MY_STRUCTURES).find((s): s is StructureTerminal => s.structureType === STRUCTURE_TERMINAL);
     if (!mineral || !extractor || !terminal) {
       harvester.memory.role = 'worker';
       continue;
     }
-    if ((harvester.store.getUsedCapacity() ?? 0) > 0) {
-      if (harvester.transfer(terminal, mineral.mineralType) === ERR_NOT_IN_RANGE) travel(harvester, terminal.pos, 1);
+    const carriedType = carriedMineral(harvester);
+    const labs = roomLabs(room);
+    // lab 接收判据:空(任意矿)或已持同矿,且该矿存量低于补料线。
+    const canAccept = (lab: StructureLab, res: string) =>
+      (labMineral(lab) === undefined || labMineral(lab) === res)
+      && ((lab.store.getUsedCapacity(res as ResourceConstant) ?? 0) < LAB_INPUT_LACK);
+    if (carriedType) {
+      // 供料半程:手里是配方输入且任一可收 lab 缺料 → 送 lab;否则回落 terminal。
+      const recipe = currentRecipe(terminalStock(terminal));
+      const target = recipe && recipe.inputs.includes(carriedType)
+        ? labs.find(l => canAccept(l, carriedType))
+        : undefined;
+      if (target && harvester.transfer(target, carriedType as ResourceConstant) === ERR_NOT_IN_RANGE) travel(harvester, target.pos, 1);
+      else if (harvester.transfer(terminal, carriedType as ResourceConstant) === ERR_NOT_IN_RANGE) travel(harvester, terminal.pos, 1);
       continue;
+    }
+    // 取货半程:仅在恰已站在 terminal 旁时顺路捎带——不为取料专门跑腿
+    // (采矿是本职;terminal 有矿的窗口在送矿时自然出现)。
+    const recipe = currentRecipe(terminalStock(terminal));
+    if (recipe && harvester.pos.isNearTo(terminal.pos)) {
+      const input = recipe.inputs.find(res => (terminal.store.getUsedCapacity(res as ResourceConstant) ?? 0) > 0
+        && labs.some(l => canAccept(l, res)));
+      if (input) {
+        if (harvester.withdraw(terminal, input as ResourceConstant) === ERR_NOT_IN_RANGE) travel(harvester, terminal.pos, 1);
+        continue;
+      }
     }
     if (!harvester.pos.isNearTo(mineral.pos)) { travel(harvester, mineral.pos, 1); continue; }
     if (harvester.store.getFreeCapacity() > 0) harvester.harvest(mineral);
   }
+}
+
+function carriedMineral(creep: Creep): string | undefined {
+  const store = (creep.store ?? {}) as unknown as Record<string, number | undefined>;
+  const keys = Object.keys(store).filter(k => k !== RESOURCE_ENERGY && (store[k] ?? 0) > 0);
+  return keys.length ? keys[0] : undefined;
+}
+
+function roomLabs(room: Room): StructureLab[] {
+  return room.find(FIND_MY_STRUCTURES)
+    .filter((s): s is StructureLab => s.structureType === STRUCTURE_LAB)
+    .sort((a, b) => a.id.localeCompare(b.id));
 }

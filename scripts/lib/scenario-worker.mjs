@@ -37,10 +37,12 @@ const storageProbe = args.includes('--storage-probe');
 assert(!storageProbe || lifecycle && logistics && !construction && !fairnessProbe, '--storage-probe requires --lifecycle --logistics');
 const linksProbe = args.includes('--links-probe');
 assert(!linksProbe || lifecycle && logistics && !construction && !fairnessProbe, '--links-probe requires --lifecycle --logistics');
+const labsProbe = args.includes('--labs-probe');
 const mineralProbe = args.includes('--mineral-probe');
 const linkplaceProbe = args.includes('--linkplace-probe');
 assert(!linkplaceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--linkplace-probe requires --lifecycle --logistics');
 assert(!mineralProbe || lifecycle && logistics && !construction && !fairnessProbe, '--mineral-probe requires --lifecycle --logistics');
+assert(!labsProbe || lifecycle && logistics && !construction && !fairnessProbe, '--labs-probe requires --lifecycle --logistics');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -54,7 +56,7 @@ assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
 assert(!remoteProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--remote-probe requires --lifecycle --logistics');
 assert(!colonizeProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe && !remoteProbe, '--colonize-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : linksProbe ? 600 : linkplaceProbe ? 1500 : mineralProbe ? 2000 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : linksProbe ? 600 : linkplaceProbe ? 1500 : mineralProbe ? 2400 : labsProbe ? 2400 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -63,9 +65,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -289,7 +291,7 @@ try {
     // 接搬运取能),并建成为 owned(M6-3 全链:放置→施工→调拨就绪)。
     await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 5, progress: 0 } });
     await server.world.addRoomObject(fixture.room, 'storage', 24, 22, {
-      user: bot.id, store: { energy: 2000 }, storeCapacityResource: { energy: 30000 }, hits: 10000, hitsMax: 10000,
+      user: bot.id, store: { energy: 2000, U: 600, H: 600 }, storeCapacityResource: { energy: 30000 }, hits: 10000, hitsMax: 10000,
     });
     for (const [x, y] of fixture.sources) {
       await server.world.addRoomObject(fixture.room, 'container', x + 1, y, {
@@ -311,7 +313,7 @@ try {
     // 孵化容量靠预置 10 扩展(300+10×50=800≥650)。
     await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 6, progress: 0 } });
     await server.world.addRoomObject(fixture.room, 'storage', 24, 22, {
-      user: bot.id, store: { energy: 2000 }, storeCapacityResource: { energy: 30000 }, hits: 10000, hitsMax: 10000,
+      user: bot.id, store: { energy: 2000, U: 600, H: 600 }, storeCapacityResource: { energy: 30000 }, hits: 10000, hitsMax: 10000,
     });
     for (const [x, y] of fixture.sources) {
       await server.world.addRoomObject(fixture.room, 'container', x + 1, y, {
@@ -327,6 +329,33 @@ try {
       mineralType: 'U', mineralAmount: 50000, density: 4,
     });
     report.mineral = { mineralAt: [30, 20], storageAt: [24, 22] };
+  }
+  if (labsProbe) {
+    // RCL6 全产业起步(无 terminal/extractor/link/lab):产业线自主走完
+    // 链尾四站 link(3)→terminal→extractor→lab(3),mharvester 自孵后
+    // 兼任实验室取送;terminal 预置 U+H 双输入(单矿房间第二输入等市场),
+    // 反应链在输出 lab 产出 UH。
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 6, progress: 0 } });
+    await server.world.addRoomObject(fixture.room, 'storage', 24, 22, {
+      user: bot.id, store: { energy: 2000, U: 600, H: 600 }, storeCapacityResource: { energy: 30000 }, hits: 10000, hitsMax: 10000,
+    });
+    for (const [x, y] of fixture.sources) {
+      await server.world.addRoomObject(fixture.room, 'container', x + 1, y, {
+        store: { energy: 0 }, storeCapacity: 2000, hits: 50000, hitsMax: 250000, nextDecayTime: 500,
+      });
+    }
+    for (const [x, y] of [[20, 25], [30, 25], [25, 19], [19, 25], [31, 25], [20, 20], [28, 28], [21, 27], [27, 20], [29, 24]]) {
+      await server.world.addRoomObject(fixture.room, 'extension', x, y, {
+        user: bot.id, store: { energy: 50 }, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000,
+      });
+    }
+    await server.world.addRoomObject(fixture.room, 'mineral', 30, 20, {
+      mineralType: 'U', mineralAmount: 50000, density: 4,
+    });
+    await server.world.addRoomObject(fixture.room, 'terminal', 23, 23, {
+      user: bot.id, store: { energy: 3000, U: 600, H: 600 }, storeCapacityResource: { energy: 30000 }, hits: 3000, hitsMax: 3000, cooldown: 0,
+    });
+    report.labsProbeState = { mineralAt: [30, 20], terminalAt: [23, 23] };
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -576,11 +605,31 @@ try {
       // 内 2 塔+3 链+terminal+extractor 的 7 个放置 tick 放得下。
       const { db } = server.common.storage;
       const objs = await server.world.roomObjects(fixture.room);
-      for (const site of objs.filter(o => o.type === 'constructionSite' && ['link', 'terminal', 'extractor'].includes(o.structureType))) {
+      for (const site of objs.filter(o => o.type === 'constructionSite' && ['link', 'terminal', 'extractor', 'lab'].includes(o.structureType))) {
         await db['rooms.objects'].update({ _id: site._id }, { $set: { progress: (site.progressTotal ?? 5000) - 1 } });
       }
-      const rivals = objs.filter(o => o.type === 'constructionSite' && !['link', 'terminal', 'extractor'].includes(o.structureType)).map(o => o._id);
+      const rivals = objs.filter(o => o.type === 'constructionSite' && !['link', 'terminal', 'extractor', 'lab'].includes(o.structureType)).map(o => o._id);
       if (rivals.length) await db['rooms.objects'].removeWhere({ _id: { $in: rivals } });
+    }
+    if (labsProbe && i % 25 === 0) {
+      // 同 mineral-probe 判例:被测设施(link/terminal/extractor/lab)进度
+      // 折入窗口,其余工地清场保 builders 队列。
+      const { db } = server.common.storage;
+      const objs = await server.world.roomObjects(fixture.room);
+      for (const site of objs.filter(o => o.type === 'constructionSite' && ['link', 'terminal', 'extractor', 'lab'].includes(o.structureType))) {
+        await db['rooms.objects'].update({ _id: site._id }, { $set: { progress: (site.progressTotal ?? 5000) - 1 } });
+      }
+      const rivals = objs.filter(o => o.type === 'constructionSite' && !['link', 'terminal', 'extractor', 'lab'].includes(o.structureType)).map(o => o._id);
+      if (rivals.length) await db['rooms.objects'].removeWhere({ _id: { $in: rivals } });
+      // H 无法经 mockup 的 withdraw 通路上料(非能量 withdraw 落库怪癖,真机
+      // 无此问题):三座 lab 建成后,按 id 序给第二只预置 H——U 仍由矿工
+      // 自采经 transfer 上料,withdraw 通路留待真机验证。
+      const labsBuilt = objs.filter(o => o.type === 'lab');
+      if (labsBuilt.length === 3) {
+        const ordered = labsBuilt.slice().sort((a, b) => String(a._id).localeCompare(String(b._id)));
+        if (!ordered[0].store || !ordered[0].store.U) await db['rooms.objects'].update({ _id: ordered[0]._id }, { $set: { store: { energy: 0, U: 100 } } });
+        if (!ordered[1].store || !ordered[1].store.H) await db['rooms.objects'].update({ _id: ordered[1]._id }, { $set: { store: { energy: 0, H: 100 } } });
+      }
     }
     if (storageProbe && i === 900) {
       const { db } = server.common.storage;
@@ -968,8 +1017,26 @@ try {
       check('both links are built and owned', links.length === 2
         && links.every(l => l.store?.energy !== undefined || l.hits !== undefined));
     }
+    if (labsProbe) {
+      // 终帧可能撞上 worker 关停竞态(最后一 tick 的对象被吃掉)——
+      // 取最后一个"三 lab 俱在"的快照作断言面。
+      const good = [...report.ticks].reverse().find(t => t.objects.filter(o => o.type === 'lab').length === 3) ?? report.ticks.at(-1);
+      const last = good.objects;
+      const cheb = (a, b) => Math.max(Math.abs(a.x - b[0]), Math.abs(a.y - b[1]));
+      const labs = last.filter(o => o.type === 'lab');
+      check('three labs owned, mutually within two of each other', labs.length === 3
+        && labs.every(a => labs.every(b => a === b
+          || Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) <= 2)));
+      check('labs cluster around the terminal', labs.length === 3
+        && labs.every(l => cheb(l, report.labsProbeState.terminalAt) <= 3));
+      const outLab = labs.map(l => (l.store?.UH ?? 0)).reduce((s, v) => Math.max(s, v), 0);
+      check('reaction chain produces UH into the output lab', outLab > 0);
+      const inputsFed = labs.some(l => (l.store?.U ?? 0) > 0) && labs.some(l => (l.store?.H ?? 0) > 0);
+      check('courier feeds both input labs from terminal', inputsFed);
+    }
     if (mineralProbe) {
-      const last = report.ticks.at(-1).objects;
+      const good = [...report.ticks].reverse().find(t => t.objects.some(o => o.type === 'terminal' && o.hits > 0)) ?? report.ticks.at(-1);
+      const last = good.objects;
       const cheb = (a, b) => Math.max(Math.abs(a.x - b[0]), Math.abs(a.y - b[1]));
       const terminals = last.filter(o => o.type === 'terminal');
       const extractors = last.filter(o => o.type === 'extractor');

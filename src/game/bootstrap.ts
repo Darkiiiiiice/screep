@@ -4,6 +4,7 @@ import { guardSpawnNeed } from '../domain/combat';
 import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { runLogistics, runMinerals, runMiners } from './logistics';
+import { driveLabs } from './labs';
 import { driveGuards, runDefense } from './defense';
 import { driveLinks } from './links';
 import { flushTraffic, requestMove } from './traffic';
@@ -294,6 +295,7 @@ export function runBootstrap(): void {
       const handled = Memory.logisticsEnabled === true && !state.degraded ? runLogistics(room, creeps, sources, { spawnWaiting, dedicatedSources: new Set(miners.map(m => m.memory.minerSource).filter((id): id is string => id !== undefined)) }) : new Set<string>();
       if (Memory.logisticsEnabled === true) isolate(state, 'miners', () => runMiners(room, sources));
       if (Memory.logisticsEnabled === true) isolate(state, 'minerals', () => runMinerals(room));
+      if (Memory.logisticsEnabled === true) isolate(state, 'labs', () => driveLabs(room));
       isolate(state, 'intel-eval', () => runEvaluation(room.name));
       creeps.sort((a, b) => a.name.localeCompare(b.name));
       for (let j = 0; j < creeps.length; j++) {

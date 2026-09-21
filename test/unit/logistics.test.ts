@@ -70,6 +70,7 @@ it('keeps per-room task memory isolated when sibling rooms run on shared memory'
   vi.stubGlobal('STRUCTURE_LINK', 'link');
   vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
   vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
+  vi.stubGlobal('STRUCTURE_LAB', 'lab');
   vi.stubGlobal('FIND_MINERALS', 4);
   vi.stubGlobal('StructureExtractor', class {});
   vi.stubGlobal('STRUCTURE_TOWER', 'tower');
@@ -124,6 +125,7 @@ it('appoints an upgrader in the downgrade recovery band despite fresh crumb prog
   vi.stubGlobal('STRUCTURE_LINK', 'link');
   vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
   vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
+  vi.stubGlobal('STRUCTURE_LAB', 'lab');
   vi.stubGlobal('FIND_MINERALS', 4);
   vi.stubGlobal('StructureExtractor', class {});
   vi.stubGlobal('STRUCTURE_TOWER', 'tower');
@@ -180,6 +182,7 @@ it('lease-held progress refreshes the clock and releases without reappointing in
   vi.stubGlobal('STRUCTURE_LINK', 'link');
   vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
   vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
+  vi.stubGlobal('STRUCTURE_LAB', 'lab');
   vi.stubGlobal('FIND_MINERALS', 4);
   vi.stubGlobal('StructureExtractor', class {});
   vi.stubGlobal('STRUCTURE_TOWER', 'tower');

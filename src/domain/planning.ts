@@ -196,3 +196,31 @@ export function extractorSite(args: {
   const covered = (t: Tile) => args.extractors.some(e => e.x === t.x && e.y === t.y);
   return args.minerals.filter(m => !covered(m)).sort((a, b) => a.x - b.x || a.y - b.y)[0];
 }
+
+/**
+ * lab 选点(M6-5):以 terminal 为锚(3 环内,取送动线),与全部既有 lab
+ * 互距 ≤2(反应要求 lab1/lab2 都在输出 lab 的 2 环内——簇形是反应链的
+ * 几何前提)。确定性排序:距锚 > 坐标序。cap 由 growth 链把关。
+ */
+export function labSite(args: {
+  anchor?: Tile | undefined;
+  labs: readonly Tile[];
+  free: (x: number, y: number) => boolean;
+}): Tile | undefined {
+  if (!args.anchor) return undefined;
+  const chebyshev = (a: Tile, b: Tile) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  const candidates: Tile[] = [];
+  for (let x = args.anchor.x - 3; x <= args.anchor.x + 3; x++) {
+    for (let y = args.anchor.y - 3; y <= args.anchor.y + 3; y++) {
+      const tile = { x, y };
+      if (!args.free(x, y)) continue;
+      // 锚点格被 terminal 占用;即便 free 通过(纯函数不假设)也不许叠建。
+      if (chebyshev(tile, args.anchor) === 0) continue;
+      if (args.labs.some(l => chebyshev(l, tile) > 2)) continue;
+      candidates.push(tile);
+    }
+  }
+  const anchor = args.anchor;
+  candidates.sort((a, b) => chebyshev(a, anchor) - chebyshev(b, anchor) || a.x - b.x || a.y - b.y);
+  return candidates[0];
+}
