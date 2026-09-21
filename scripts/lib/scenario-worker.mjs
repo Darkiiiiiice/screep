@@ -35,6 +35,8 @@ const combatProbe = args.includes('--combat-probe');
 assert(!combatProbe || lifecycle && logistics && !construction && !fairnessProbe, '--combat-probe requires --lifecycle --logistics');
 const storageProbe = args.includes('--storage-probe');
 assert(!storageProbe || lifecycle && logistics && !construction && !fairnessProbe, '--storage-probe requires --lifecycle --logistics');
+const linksProbe = args.includes('--links-probe');
+assert(!linksProbe || lifecycle && logistics && !construction && !fairnessProbe, '--links-probe requires --lifecycle --logistics');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -48,7 +50,7 @@ assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
 assert(!remoteProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--remote-probe requires --lifecycle --logistics');
 assert(!colonizeProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe && !remoteProbe, '--colonize-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : linksProbe ? 600 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -57,9 +59,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -258,6 +260,24 @@ try {
       });
     }
     report.storage = { storageAt: [24, 22], seed: 5000, floor: 1000, cutAt: 500, freezeAt: 900 };
+  }
+  if (linksProbe) {
+    // RCL5 + 预置 link 对(M6-2 调拨;布局放置属 M6-3):源 link(源旁 2 环内,
+    // 满仓 800)必须被 driveLinks 半仓阈值一发打到中枢,扣除 3% 引擎损耗后
+    // 中枢入仓 776;搬运链随后把中枢能量喂进基地。断言单向性:源 link 清零
+    // 后绝不回流,中枢峰值被损耗上界封顶。
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 5, progress: 0 } });
+    const [sx, sy] = fixture.sources[0];
+    await server.world.addRoomObject(fixture.room, 'link', sx + 2, sy, {
+      user: bot.id, store: { energy: 800 }, storeCapacityResource: { energy: 800 }, cooldown: 0, hits: 1000, hitsMax: 1000,
+    });
+    await server.world.addRoomObject(fixture.room, 'link', 26, 22, {
+      user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 800 }, cooldown: 0, hits: 1000, hitsMax: 1000,
+    });
+    await server.world.addRoomObject(fixture.room, 'storage', 24, 22, {
+      user: bot.id, store: { energy: 0 }, storeCapacityResource: { energy: 30000 }, hits: 10000, hitsMax: 10000,
+    });
+    report.links = { sourceAt: [sx + 2, sy], hubAt: [26, 22], seed: 800, expectedArrival: 776 };
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -667,7 +687,7 @@ try {
       maxControllerIdle = Math.max(maxControllerIdle, controllerIdle);
       lastControllerProgress = delivered;
       if (i % 100 === 0) console.log(`[lifecycle] tick=${i} workers=${workers.length} progress=${delivered}`);
-      if (i % 100 === 0 || i === tickCount - 1 || economyProbe && i % 10 === 0 || combatProbe && i % 25 === 0 || storageProbe && i % 25 === 0) { report.ticks.push(snapshot); save(); }
+      if (i % 100 === 0 || i === tickCount - 1 || economyProbe && i % 10 === 0 || combatProbe && i % 25 === 0 || storageProbe && i % 25 === 0 || linksProbe && i % 10 === 0) { report.ticks.push(snapshot); save(); }
     } else if (!fairnessProbe) { report.ticks.push(snapshot); save(); }
     else if (i % 100 === 0 || i === tickCount - 1) { report.ticks.push({ time: snapshot.time, objects: snapshot.objects.filter(o => o.type === 'extension' || o.type === 'creep' || o.type === 'spawn'), ...(multiRoom ? { roomB: snapshot.roomB } : {}), memory: snapshot.memory }); save(); }
   }
@@ -859,6 +879,18 @@ try {
           const c = rooms[t.name]?.controller;
           return c && c.owner === undefined && (c.reserver === undefined || c.reserver === 'M0');
         }));
+    }
+    if (linksProbe) {
+      const linkAt = (t, [x, y]) => t.objects.find(o => o.type === 'link' && o.x === x && o.y === y)?.store?.energy;
+      const rows = report.ticks.map(t => ({ t: t.time, src: linkAt(t, report.links.sourceAt), hub: linkAt(t, report.links.hubAt) }))
+        .filter(r => r.src !== undefined && r.hub !== undefined);
+      check('source link is dispatched down to empty', rows.some(r => r.src === 0));
+      const firstEmpty = rows.findIndex(r => r.src === 0);
+      check('no energy ever flows back into the source link',
+        firstEmpty >= 0 && rows.slice(firstEmpty).every(r => r.src === 0));
+      check('hub receives within the 3% loss bound',
+        rows.some(r => r.hub > 700 && r.hub <= report.links.expectedArrival)
+        && rows.every(r => r.hub <= report.links.expectedArrival));
     }
     if (storageProbe) {
       const storageSeries = report.ticks.map(t => ({ t: t.time, e: t.objects.find(o => o.type === 'storage')?.store?.energy }));

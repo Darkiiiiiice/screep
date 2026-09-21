@@ -117,6 +117,7 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
   vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
   vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
   vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_LINK', 'link');
   vi.stubGlobal('STRUCTURE_TOWER', 'tower');
   vi.stubGlobal('STRUCTURE_STORAGE', 'storage');
   vi.stubGlobal('FIND_STRUCTURES', 1);

@@ -5,6 +5,7 @@ import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { runLogistics, runMiners } from './logistics';
 import { driveGuards, runDefense } from './defense';
+import { driveLinks } from './links';
 import { flushTraffic, requestMove } from './traffic';
 import { driveClaimers, driveColonizers, drivePioneers, driveRemoteMining, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
 
@@ -157,6 +158,7 @@ export function runBootstrap(): void {
     isolate(state, room.name, () => {
       isolate(state, 'defense', () => runDefense(room, policy.policy.allies));
       isolate(state, 'guard', () => driveGuards(room, policy.policy.allies));
+      isolate(state, 'links', () => driveLinks(room));
       const sources = room.find(FIND_SOURCES);
       const roomCreeps = room.find(FIND_MY_CREEPS);
       const creeps = roomCreeps.filter(c => c.memory.role !== 'miner' && c.memory.role !== 'pioneer' && c.getActiveBodyparts(WORK) > 0 && c.getActiveBodyparts(CARRY) > 0 && c.getActiveBodyparts(MOVE) > 0);

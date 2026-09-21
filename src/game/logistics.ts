@@ -255,7 +255,12 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   // Storage is both a stockpile sink and a supply source for builders/repairers
   // once it exists (RCL4). Withdrawals read it without pulling from the haul loops.
   const storage = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureStorage => s.structureType === STRUCTURE_STORAGE && s.store.getUsedCapacity(RESOURCE_ENERGY) > 0)[0];
-  const stockpiles = [...containers, ...(storage ? [storage] : [])];
+  // 中枢 link(非 source 侧)是搬运链的取能库存:能量已由 link 调拨送到
+  // 基地侧,搬运工从 hub link 提取喂各 sink;源 link 不入库(须攒到半仓
+  // 供发送,搬工会截胡饿死发送节奏)。
+  const links = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureLink => s.structureType === STRUCTURE_LINK);
+  const hubLinks = links.filter(l => !sources.some(src => l.pos.inRangeTo(src.pos, 2)));
+  const stockpiles: (StructureContainer | StructureStorage | StructureLink)[] = [...containers, ...(storage ? [storage] : []), ...hubLinks];
   // 产业取能视角(M6-1):storage 低于保底线(STORAGE_RESERVE_FLOOR)时对
   // 升级/建造/维修不可见——保底留给紧急孵化与塔防;生存链(搬运-孵化补货)
   // 仍走全量 stockpiles,可击穿保底。
@@ -345,7 +350,15 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     delete miner.memory.containerBuilder;
     delete miner.memory.shipment;
     if (!miner.pos.isEqualTo(container.pos)) { travel(miner, container.pos, 0); continue; }
-    if (miner.store.energy > 0) miner.transfer(container, RESOURCE_ENERGY);
+    if (miner.store.energy > 0) {
+      // 容器满仓即外溢进相邻源 link(M6-2):矿工不停摆,link 攒半仓后由
+      // linkTransfers 发往中枢——远矿运输被 link 替代的前半程。
+      if (miner.transfer(container, RESOURCE_ENERGY) === ERR_FULL) {
+        const link = room.find(FIND_MY_STRUCTURES).find((l): l is StructureLink =>
+          l.structureType === STRUCTURE_LINK && l.pos.isNearTo(miner.pos) && l.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
+        if (link) miner.transfer(link, RESOURCE_ENERGY);
+      }
+    }
     if (container.store.getFreeCapacity(RESOURCE_ENERGY) > 0) miner.harvest(source);
   }
   // Growth sites (extensions, roads, …) are the RCL2-4 development gate: a single
@@ -501,7 +514,15 @@ export function runMiners(room: Room, sources: Source[]): void {
       continue;
     }
     if (!miner.pos.isEqualTo(container.pos)) { travel(miner, container.pos, 0); continue; }
-    if (miner.store.energy > 0) miner.transfer(container, RESOURCE_ENERGY);
+    if (miner.store.energy > 0) {
+      // 容器满仓即外溢进相邻源 link(M6-2):矿工不停摆,link 攒半仓后由
+      // linkTransfers 发往中枢——远矿运输被 link 替代的前半程。
+      if (miner.transfer(container, RESOURCE_ENERGY) === ERR_FULL) {
+        const link = room.find(FIND_MY_STRUCTURES).find((l): l is StructureLink =>
+          l.structureType === STRUCTURE_LINK && l.pos.isNearTo(miner.pos) && l.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
+        if (link) miner.transfer(link, RESOURCE_ENERGY);
+      }
+    }
     if (container.store.getFreeCapacity(RESOURCE_ENERGY) > 0) miner.harvest(source);
   }
 }
