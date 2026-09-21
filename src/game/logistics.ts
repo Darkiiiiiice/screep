@@ -4,7 +4,7 @@ import { rankServices, settleService, type ServiceState } from '../domain/servic
 import { REPAIR_THRESHOLD, selectRepairTarget } from '../domain/maintenance';
 import { type TrafficState } from '../domain/traffic';
 import { requestMove as travel } from './traffic';
-import { extensionTiles, preservesConnectivity } from '../domain/planning';
+import { extensionTiles, preservesConnectivity, linkSite } from '../domain/planning';
 
 declare global {
   interface CreepMemory {
@@ -193,6 +193,9 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   const storageCap = CONTROLLER_STRUCTURES[STRUCTURE_STORAGE]?.[rcl] ?? 0;
   const storageOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_STORAGE).length;
   const storagePlanned = allSites.filter(s => s.structureType === STRUCTURE_STORAGE).length;
+  const linkCap = CONTROLLER_STRUCTURES[STRUCTURE_LINK]?.[rcl] ?? 0;
+  const linkOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_LINK).length;
+  const linkPlanned = allSites.filter(s => s.structureType === STRUCTURE_LINK).length;
   // Stage order: extensions to the base economy (5) → tower (defense) → storage
   // (RCL4 buffer). Placement keys on OWNED progress; a tower that exists as a
   // site unlocks storage, and once the tower is owned or placed the extension
@@ -204,27 +207,48 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     extensionCap - extensionOwned - extensionPlanned > 0 && extensionOwned < 5 ? STRUCTURE_EXTENSION
     : towerCap - towerOwned - towerPlanned > 0 ? STRUCTURE_TOWER
     : (towerOwned + towerPlanned > 0) && storageCap - storageOwned - storagePlanned > 0 ? STRUCTURE_STORAGE
+    : (towerOwned + towerPlanned > 0) && linkCap - linkOwned - linkPlanned > 0 ? STRUCTURE_LINK
     : (towerOwned + towerPlanned > 0) && extensionCap - extensionOwned - extensionPlanned > 0 && extensionPlanned < 3 ? STRUCTURE_EXTENSION
       : undefined;
   const growthOwned = growthType === STRUCTURE_EXTENSION ? extensionOwned
-    : growthType === STRUCTURE_TOWER ? towerOwned : storageOwned;
+    : growthType === STRUCTURE_TOWER ? towerOwned : growthType === STRUCTURE_LINK ? linkOwned : storageOwned;
   const growthPlanned = growthType === STRUCTURE_EXTENSION ? extensionPlanned
-    : growthType === STRUCTURE_TOWER ? towerPlanned : storagePlanned;
+    : growthType === STRUCTURE_TOWER ? towerPlanned : growthType === STRUCTURE_LINK ? linkPlanned : storagePlanned;
   const growthCap = growthType === STRUCTURE_EXTENSION ? extensionCap
-    : growthType === STRUCTURE_TOWER ? towerCap : storageCap;
+    : growthType === STRUCTURE_TOWER ? towerCap : growthType === STRUCTURE_LINK ? linkCap : storageCap;
   if (miningSelfSufficient && growthType && growthCap - growthOwned - growthPlanned > 0 && spawns[0]) {
     const free = (x: number, y: number) => {
       const position = new RoomPosition(x, y, room.name);
       return position.lookFor(LOOK_TERRAIN)[0] !== 'wall'
         && position.lookFor(LOOK_STRUCTURES).length === 0
-        && position.lookFor(LOOK_CONSTRUCTION_SITES).length === 0;
+        && position.lookFor(LOOK_CONSTRUCTION_SITES).length === 0
+        // 源地块不在 LOOK_STRUCTURES:不显式排除,环扫选点会盖住矿头。
+        && !sources.some(src => src.pos.x === x && src.pos.y === y);
     };
     const passable = (x: number, y: number) => x >= 0 && x < 50 && y >= 0 && y < 50 && free(x, y);
     // Scan a small candidate window: cut vertices (corridor/pocket entrances)
     // are skipped, then the first surviving tile gets the one site of this tick.
+    // link(M6-3)不走 spawn 环——锚点是 source(源链)与 storage(中枢链):
+    if (growthType === STRUCTURE_LINK) {
+      const anchorLinks = [
+        ...room.find(FIND_MY_STRUCTURES).filter((s): s is StructureLink => s.structureType === STRUCTURE_LINK).map(l => ({ x: l.pos.x, y: l.pos.y })),
+        ...allSites.filter(s => s.structureType === STRUCTURE_LINK).map(l => ({ x: l.pos.x, y: l.pos.y })),
+      ];
+      const site = linkSite({
+        sources: sources.map(src => ({ x: src.pos.x, y: src.pos.y })),
+        containers: containers.map(c => ({ x: c.pos.x, y: c.pos.y })),
+        storage: (() => {
+          const anchor = room.find(FIND_MY_STRUCTURES).find((s): s is StructureStorage => s.structureType === STRUCTURE_STORAGE);
+          return anchor ? { x: anchor.pos.x, y: anchor.pos.y } : undefined;
+        })(),
+        links: anchorLinks, capacity: linkCap, free,
+      });
+      if (site) room.createConstructionSite(site.x, site.y, STRUCTURE_LINK);
+    } else {
     for (const tile of extensionTiles({ x: spawns[0].pos.x, y: spawns[0].pos.y }, free, 8)) {
       if (!preservesConnectivity(tile, passable)) continue;
       if (room.createConstructionSite(tile.x, tile.y, growthType) === OK) break;
+    }
     }
   }
   const ranked = rankServices(sinks.map(s => ({ id: s.id, priority: s.structureType === STRUCTURE_SPAWN ? 10 : s.structureType === STRUCTURE_TOWER ? 7 : 5,

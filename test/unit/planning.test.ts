@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { extensionTiles, preservesConnectivity, spawnTile } from '../../src/domain/planning';
+import { extensionTiles, linkSite, preservesConnectivity, spawnTile } from '../../src/domain/planning';
 import { runLogistics } from '../../src/game/logistics';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -247,5 +247,38 @@ describe('extension placement and construction', () => {
     const [x, y] = createConstructionSite.mock.calls[0]!;
     expect([x, y]).not.toEqual([23, 25]);
     expect(Math.max(Math.abs(x - 25), Math.abs(y - 25))).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('link placement (M6-3)', () => {
+  const free = () => true;
+  const src = (x: number, y: number) => ({ x, y });
+
+  it('places the first link beside a container near its source', () => {
+    const site = linkSite({
+      sources: [src(20, 20)], containers: [src(21, 20)], capacity: 2, links: [], free,
+    });
+    expect(site).toBeDefined();
+    expect(Math.max(Math.abs(site!.x - 20), Math.abs(site!.y - 20))).toBeLessThanOrEqual(2);
+    expect(Math.max(Math.abs(site!.x - 21), Math.abs(site!.y - 20))).toBeLessThanOrEqual(1);
+  });
+
+  it('adds the hub next to storage before a second source link', () => {
+    const base = { sources: [src(10, 10), src(40, 40)], containers: [src(11, 10), src(41, 40)], storage: src(25, 25), capacity: 3, free };
+    const first = linkSite({ ...base, links: [] });
+    expect(Math.max(Math.abs(first!.x - 10), Math.abs(first!.y - 10))).toBeLessThanOrEqual(2);
+    const second = linkSite({ ...base, links: [first!] });
+    expect(Math.max(Math.abs(second!.x - 25), Math.abs(second!.y - 25))).toBeLessThanOrEqual(2);
+    const third = linkSite({ ...base, links: [first!, second!] });
+    expect(Math.max(Math.abs(third!.x - 40), Math.abs(third!.y - 40))).toBeLessThanOrEqual(2);
+  });
+
+  it('respects the cap and occupied tiles', () => {
+    expect(linkSite({ sources: [src(10, 10)], containers: [], capacity: 1, links: [src(10, 11)], free })).toBeUndefined();
+    const blocked = linkSite({
+      sources: [src(10, 10)], containers: [src(11, 10)], capacity: 2, links: [],
+      free: (x, y) => !(x >= 8 && x <= 12 && y >= 8 && y <= 12),
+    });
+    expect(blocked).toBeUndefined();
   });
 });

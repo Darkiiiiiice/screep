@@ -45,7 +45,8 @@
     "test:colonize": "node scripts/scenario.mjs --lifecycle --logistics --colonize-probe",
     "test:combat": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --combat-probe",
     "test:storage": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --storage-probe",
-    "test:links": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --links-probe"
+    "test:links": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --links-probe",
+    "test:linkplace": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --linkplace-probe"
   },
   "dependencies": {
     "screeps-api": "^2.1.0"

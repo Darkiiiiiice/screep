@@ -94,3 +94,65 @@ export function spawnTile(controller: Tile, sources: readonly Tile[], free: (x: 
   }
   return best;
 }
+
+/**
+ * link 选点(M6-3):源链优先(每源一链,贴容器以接矿工外溢),全源有链后
+ * 补中枢链(贴 storage,搬运链就近取能)。确定性排序:贴容器 > 距锚点 >
+ * 坐标序;不贴既有 link(避免互相堵位),cap 硬顶。容量序:源1 → 中枢 →
+ * 源2…(RCL5 cap 2 时保证 源+中枢 可用,调拨图成立)。
+ */
+export function linkSite(args: {
+  sources: readonly Tile[];
+  containers: readonly Tile[];
+  storage?: Tile | undefined;
+  links: readonly Tile[];
+  capacity: number;
+  free: (x: number, y: number) => boolean;
+}): Tile | undefined {
+  const chebyshev = (a: Tile, b: Tile) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  if (args.links.length >= args.capacity) return undefined;
+  const box = (anchor: Tile, wantContainer: boolean): Tile | undefined => {
+    const nearby = args.containers.filter(c => chebyshev(c, anchor) <= 2);
+    const candidates: Tile[] = [];
+    for (let x = anchor.x - 2; x <= anchor.x + 2; x++) {
+      for (let y = anchor.y - 2; y <= anchor.y + 2; y++) {
+        if (x < 1 || x > 48 || y < 1 || y > 48) continue;
+        if (!args.free(x, y)) continue;
+        const tile = { x, y };
+        // 源地块不在 LOOK_STRUCTURES 里,free() 看不见——显式排除,
+        // 否则 link 会盖住矿头(mockup 放行、真引擎拒,且堵死采矿)。
+        if (args.sources.some(s => s.x === x && s.y === y)) continue;
+        if (args.links.some(l => chebyshev(l, tile) <= 1)) continue;
+        candidates.push(tile);
+      }
+    }
+    if (!candidates.length) return undefined;
+    const score = (t: Tile) => {
+      const containerAdj = wantContainer && nearby.some(c => chebyshev(c, t) <= 1) ? 0 : 1;
+      return containerAdj * 10 + chebyshev(t, anchor);
+    };
+    candidates.sort((a, b) => score(a) - score(b) || a.x - b.x || a.y - b.y);
+    return candidates[0];
+  };
+  const ordered = [...args.sources].sort((a, b) => a.x - b.x || a.y - b.y);
+  const sourceLinks = args.links.filter(l => args.sources.some(s => chebyshev(l, s) <= 2));
+  const unlinked = ordered.filter(source => !args.links.some(l => chebyshev(l, source) <= 2));
+  // 容量序:源1 → 中枢 → 源2…。中枢必须先于第二源链:RCL5 cap 2 的双源房
+  // 若两源先占满,中枢永不存在,调拨图不成立。中枢=不邻源的那条链。
+  if (sourceLinks.length === 0) {
+    const first = unlinked[0];
+    if (first) {
+      const site = box(first, true);
+      if (site) return site;
+    }
+  }
+  if (args.storage && sourceLinks.length === args.links.length) {
+    const site = box(args.storage, false);
+    if (site) return site;
+  }
+  for (const source of unlinked) {
+    const site = box(source, true);
+    if (site) return site;
+  }
+  return undefined;
+}
