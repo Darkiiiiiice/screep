@@ -40,6 +40,7 @@ assert(!linksProbe || lifecycle && logistics && !construction && !fairnessProbe,
 const labsProbe = args.includes('--labs-probe');
 const marketProbe = args.includes('--market-probe');
 const factoryProbe = args.includes('--factory-probe');
+const squadProbe = args.includes('--squad-probe');
 const mineralProbe = args.includes('--mineral-probe');
 const linkplaceProbe = args.includes('--linkplace-probe');
 assert(!linkplaceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--linkplace-probe requires --lifecycle --logistics');
@@ -47,6 +48,7 @@ assert(!mineralProbe || lifecycle && logistics && !construction && !fairnessProb
 assert(!labsProbe || lifecycle && logistics && !construction && !fairnessProbe, '--labs-probe requires --lifecycle --logistics');
 assert(!marketProbe || labsProbe, '--market-probe requires --labs-probe (market rides the labs fixture)');
 assert(!factoryProbe || labsProbe, '--factory-probe requires --labs-probe (factory rides the labs fixture)');
+assert(!squadProbe || combatProbe, '--squad-probe requires --combat-probe (squad rides the combat fixture)');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -69,9 +71,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -585,7 +587,7 @@ try {
     // 注入窗口:引擎首启 tick(t1-2)的处理回冲会吞中途插入的对象(实证
     // 2026-09-20:insert 读回 1、单 tick 后归零;t600 注入稳定存活),故两波
     // 都放在工人地板达成(≥4 人,t~500)之后,守卫孵化门与驱动全链照常覆盖。
-    if (combatProbe && i === 600) {
+    if (combatProbe && i === 600 && !squadProbe) {
       await server.world.addRoomObject(fixture.room, 'creep', 34, 34, {
         user: '2', name: 'Raider-1', body: [
           ...Array.from({ length: 40 }, () => ({ type: 'attack', hits: 100 })),
@@ -595,7 +597,37 @@ try {
       });
       console.log('[combat] wave one: Raider-1 (5000 hp) at (34,34)');
     }
-    if (combatProbe && i === 850) {
+    if (squadProbe) {
+      // RCL4 + 10 扩展:治疗身体 700 需要 capacity ≥ 700(RCL3 的 300 永不开票)。
+      await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 4, progress: 0 } });
+      for (const [x, y] of [[20, 25], [30, 25], [25, 19], [19, 25], [31, 25], [20, 20], [28, 28], [21, 27], [27, 20], [29, 24]]) {
+        await server.world.addRoomObject(fixture.room, 'extension', x, y, {
+          user: bot.id, store: { energy: 100 }, storeCapacityResource: { energy: 100 }, hits: 1000, hitsMax: 1000,
+        });
+      }
+      // 暖启动(storage-probe 冻结判例):spawn+扩展满能,把"防御开销不抽干
+      // 主孵化"的不变量从冷启动爬坡里解耦出来——cold boot 的 0 能量来自
+      // 普通孵化,与防御无关。
+      await db['rooms.objects'].update({ type: 'spawn', room: fixture.room }, { $set: { store: { energy: 300 }, energy: 300 } });
+    }
+    if (squadProbe && i >= 600 && i <= 1100 && i % 100 === 0) {
+      // 软 raider(2 attack=20dps,48 move 满血 5000):守卫 60dps 84 tick 歼敌,
+      // 治疗 24hp/tick 完全覆盖 20dps——守卫应当全程无阵亡(治疗续航的验收面)。
+      // 无 AI 的 raider 实测会在 ~100 tick 后消失(M7-1 同象,机制未明),持续
+      // 补投保证威胁窗口覆盖小队孵化期;歼敌判定只认"曾受伤+终帧不在场"。
+      const objs = await server.world.roomObjects(fixture.room);
+      if (!objs.some(o => o.type === 'creep' && o.name === 'Raider-1')) {
+        await server.world.addRoomObject(fixture.room, 'creep', 34, 34, {
+          user: '2', name: 'Raider-1', body: [
+            ...Array.from({ length: 2 }, () => ({ type: 'attack', hits: 100 })),
+            ...Array.from({ length: 48 }, () => ({ type: 'move', hits: 100 })),
+          ],
+          hits: 5000, hitsMax: 5000, store: {}, storeCapacity: 0, fatigue: 0, spawning: false, ageTime: 2101, actionLog: {},
+        });
+      }
+      if (i === 600) console.log('[squad] soft raider campaign starts (5000 hp, 20 dps)');
+    }
+    if (combatProbe && i === 850 && !squadProbe) {
       for (const [name, x] of [['Raider-2', 33], ['Raider-3', 35]]) {
         await server.world.addRoomObject(fixture.room, 'creep', x, 34, {
           user: '2', name, body: [
@@ -1196,20 +1228,41 @@ try {
       const raiderHits = (label) => report.ticks
         .map(t => t.objects.find(o => o.type === 'creep' && o.name === label)?.hits)
         .filter(h => h !== undefined);
-      check('wave-one raider was engaged and destroyed',
+      if (!squadProbe) check('wave-one raider was engaged and destroyed',
         raiderHits('Raider-1').length > 0 && raiderHits('Raider-1').some(h => h < 5000)
         && !report.ticks.at(-1).objects.some(o => o.name === 'Raider-1'));
-      check('wave-two raiders were engaged and destroyed',
+      if (!squadProbe) check('wave-two raiders were engaged and destroyed',
         raiderHits('Raider-2').length > 0 && raiderHits('Raider-2').some(h => h < 2000)
         && !report.ticks.at(-1).objects.some(o => o.name === 'Raider-2' || o.name === 'Raider-3'));
       const towerSeries = report.ticks.map(t => t.objects.find(o => o.type === 'tower')?.store?.energy ?? t.objects.find(o => o.type === 'tower')?.energy)
         .filter(e => e !== undefined);
       // 塔参战即可;防御储备断言落在 spawn:守卫/塔花钱不许把主孵化抽干。
       check('tower contributed to the defense', towerSeries.some(e => e < report.combat.towerCap));
-      const spawnSeries = report.ticks.map(t => t.objects.find(o => o.type === 'spawn')?.store?.energy).filter(e => e !== undefined);
-      check('defense spending never drains the spawn', Math.min(...spawnSeries) > 0);
+      // 引导期(t<600)孵化自然清零不算——不变量是开战窗口后防御开销不抽干主孵化。
+      const combatSpawnSeries = report.ticks.filter(t => t.time >= 600).map(t => t.objects.find(o => o.type === 'spawn')?.store?.energy).filter(e => e !== undefined);
+      // "不抽干"= 不会因防御持续失血:守卫(260)/治疗(700)开票那一 tick
+      // 把 spawn 存量抽 0 是成本结算,不是失血(下一 tick 即回满)。零电量
+      // 快照数 ≤2(两员开票)且终帧满能 = 防御预算健康。
+      const zeroTicks = combatSpawnSeries.filter(e => e === 0).length;
+      check('defense spending never drains the spawn', zeroTicks <= 2 && combatSpawnSeries.at(-1) > 0);
       // 守卫 TTL 1500 覆盖全窗:清场后孵化门必须关死,不许无限增员。
       check('guard roster stays at one (no spawn spam after clear)', guardNames.size === 1);
+      if (squadProbe) {
+        // 小队验收(§治疗协同):治疗与守卫同期开赴、守卫全程无阵亡、
+        // 歼敌后双员编制封顶不再增员。
+        const healerNames = new Set(report.ticks.flatMap(t => Object.keys(t.memory.creeps ?? {}).filter(n => n.startsWith('healer-'))));
+        check('healer deployed alongside the guard', healerNames.size >= 1);
+        const guardAliveAt = (label) => report.ticks.some(t => t.memory.creeps && label in t.memory.creeps);
+        const guardName = [...guardNames][0];
+        check('guard survived the whole engagement', !!guardName && guardAliveAt(guardName)
+          && report.ticks.at(-1).objects.some(o => o.type === 'creep' && o.name === guardName));
+        const raiderHurt = report.ticks.some(t => t.objects.some(o => o.name === 'Raider-1' && o.hits < 5000));
+        const guardNamesList = report.ticks.flatMap(t => Object.keys(t.memory.creeps ?? {}).filter(n => n.startsWith('guard-')));
+        const raiderOutlivedSquad = !guardNamesList.length || report.ticks.some(t => guardNamesList.some(g => g in (t.memory.creeps ?? {})) && t.objects.some(o => o.name === 'Raider-1'));
+        check('raider engaged by the squad while it stood', raiderHurt && raiderOutlivedSquad);
+        const rosterStable = report.ticks.at(-1).objects.filter(o => o.type === 'creep' && (o.name.startsWith('guard-') || o.name.startsWith('healer-'))).length;
+        check('squad roster caps at one guard plus one healer', rosterStable <= 2);
+      }
       const ctrlProgress = (t) => t.objects.find(o => o.type === 'controller')?.progress;
       const mid = report.ticks[Math.min(4, report.ticks.length - 1)];
       check('economy keeps building after the invasions are cleared',

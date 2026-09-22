@@ -1,5 +1,5 @@
 import { towerTargets, type HostileInput } from '../domain/defense';
-import { GUARD_RETREAT_RATIO } from '../domain/combat';
+import { GUARD_RETREAT_RATIO, HEALER_RETREAT_RATIO } from '../domain/combat';
 import { selectRepairTarget } from '../domain/maintenance';
 
 declare global {
@@ -63,6 +63,45 @@ export function driveGuards(room: Room, allies: readonly string[] = []): void {
   }
 }
 
+
+/**
+ * Healer driver (M7-2 守家小队): deterministic pairing (i-th healer → i-th
+ * guard by name sort), follow the guard one tile behind (range 2), heal the
+ * most damaged friendly in range (adjacent heal preferred), retreat earlier
+ * than the guard (HEALER_RETREAT_RATIO) — the healer is the squad's sustain,
+ * losing it first strips the guard's armor. Never seeks hostiles.
+ */
+export function driveHealers(room: Room, allies: readonly string[] = []): void {
+  const healers = Object.values(Game.creeps)
+    .filter((c) => c.memory.role === 'healer' && c.room.name === room.name)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  if (!healers.length) return;
+  const guards = Object.values(Game.creeps)
+    .filter((c) => c.memory.role === 'guard' && c.room.name === room.name)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const spawn = room.find(FIND_MY_SPAWNS)[0];
+
+  for (let i = 0; i < healers.length; i++) {
+    const healer = healers[i]!;
+    if (healer.hits / healer.hitsMax < HEALER_RETREAT_RATIO && spawn) {
+      healer.moveTo(spawn.pos, { range: 3, reusePath: 10 });
+      continue;
+    }
+    const patient = Object.values(Game.creeps)
+      // 伤员只认我方(c.my 已排除他人,盟友伤员不占我方治疗预算,§盟友豁免)。
+      .filter((c) => c.my && !allies.includes(c.owner?.username ?? '') && c.room.name === room.name && c.hits < c.hitsMax)
+      .sort((a, b) => a.hits / a.hitsMax - b.hits / b.hitsMax)[0];
+    if (patient) {
+      if (healer.pos.inRangeTo(patient, 1)) healer.heal(patient);
+      else if (healer.pos.inRangeTo(patient, 3)) healer.rangedHeal(patient);
+      else healer.moveTo(patient.pos, { range: 1, reusePath: 10 });
+      continue;
+    }
+    const guard = guards[i % Math.max(1, guards.length)];
+    if (guard && !healer.pos.inRangeTo(guard.pos, 2)) healer.moveTo(guard.pos, { range: 2, reusePath: 10 });
+    else if (!guard && spawn && !healer.pos.inRangeTo(spawn.pos, 2)) healer.moveTo(spawn.pos, { range: 2, reusePath: 20 });
+  }
+}
 
 /**
  * Tower defense: focus-fire the highest-threat hostile, heal the most damaged

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GUARD_COST, GUARD_HANDOFF_TTL, GUARD_LOSS_BUDGET, guardSpawnNeed } from '../../src/domain/combat';
+import { GUARD_COST, GUARD_HANDOFF_TTL, GUARD_LOSS_BUDGET, guardSpawnNeed, healerSpawnNeed, HEALER_HANDOFF_TTL } from '../../src/domain/combat';
 import { driveGuards } from '../../src/game/defense';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -100,5 +100,32 @@ describe('guard driver', () => {
     driveGuards(room, []);
     expect(prior.count).toBe(1);
     expect(prior.names).toEqual(['guard-here']);
+  });
+});
+
+describe('healer spawn need (M7-2 守家小队)', () => {
+  const armed = [{ armed: 2, hits: 5000 }];
+  const base = { hostiles: armed, guards: 1, healers: 0, capacity: 800, energyAvailable: 800 };
+
+  it('opens a ticket once the guard is committed and no healer stands', () => {
+    expect(healerSpawnNeed(base)).toBe(true);
+  });
+  it('refuses to send a healer without a guard on the field', () => {
+    expect(healerSpawnNeed({ ...base, guards: 0 })).toBe(false);
+  });
+  it('caps healers at one per guard while the standing healer is healthy', () => {
+    expect(healerSpawnNeed({ ...base, healers: 1 })).toBe(false);
+    expect(healerSpawnNeed({ ...base, healers: 1, healerTtl: HEALER_HANDOFF_TTL })).toBe(false);
+  });
+  it('schedules a handoff only inside the TTL window', () => {
+    expect(healerSpawnNeed({ ...base, healers: 1, healerTtl: HEALER_HANDOFF_TTL - 1 })).toBe(true);
+    expect(healerSpawnNeed({ ...base, healers: 1, healerTtl: 100 })).toBe(true);
+  });
+  it('waits for capacity and energy to cover the 700 body', () => {
+    expect(healerSpawnNeed({ ...base, capacity: 300 })).toBe(false);
+    expect(healerSpawnNeed({ ...base, energyAvailable: 650 })).toBe(false);
+  });
+  it('ignores unarmed passers-by', () => {
+    expect(healerSpawnNeed({ ...base, hostiles: [{ armed: 0, hits: 5000 }] })).toBe(false);
   });
 });

@@ -30,6 +30,38 @@ export interface GuardSpawnNeedArgs {
   losses: number;
 }
 
+export const HEALER_COST = 700; // [HEAL×2, MOVE×2]
+/** 治疗交接 TTL(与守卫同式)。 */
+export const HEALER_HANDOFF_TTL = 200;
+/** 治疗比守卫先撤(0.5):治疗是唯一续航来源,它先死等于全队拆甲(§治疗不独自进火力区)。 */
+export const HEALER_RETREAT_RATIO = 0.5;
+/** 每守卫至多一治疗:守家单守卫场景 1:1 封顶。 */
+export const HEALERS_PER_GUARD = 1;
+
+export interface HealerSpawnNeedArgs {
+  hostiles: readonly HostileSummary[];
+  /** 本房在册守卫数:无守卫不开票——治疗不独自进火力区。 */
+  guards: number;
+  healers: number;
+  healerTtl?: number | undefined;
+  capacity: number;
+  energyAvailable: number;
+}
+
+/**
+ * 治疗补员(纯):武装入侵在场、守卫已开赴、治疗链缺口时开票。
+ * 门序:无武装敌/无守卫 → 不开票;治疗满编(守卫×1) → 不开票;
+ * 损失预算/容量/能量同守卫语义;交接 TTL 触发补员。
+ */
+export function healerSpawnNeed(args: HealerSpawnNeedArgs): boolean {
+  if (!args.hostiles.some((h) => h.armed > 0)) return false;
+  if (args.guards < 1) return false;
+  if (args.healers >= args.guards * HEALERS_PER_GUARD && args.healers > 0
+    && (args.healerTtl ?? Infinity) >= HEALER_HANDOFF_TTL) return false;
+  if (args.capacity < HEALER_COST || args.energyAvailable < HEALER_COST) return false;
+  return true;
+}
+
 /**
  * 武装入侵在场且守卫链需要补员时返回 true。
  * 门序:无武装敌 → 无需求;损失预算尽 → 劣势不添兵;容量/能量不足 → 不开票;

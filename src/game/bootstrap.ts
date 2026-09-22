@@ -1,4 +1,5 @@
 import { energyBudget, mharvesterSpawnNeed, minerSpawnNeed, populationPlan, retryDelay, trackProgress, type ProgressState } from '../domain/bootstrap';
+import { healerSpawnNeed } from '../domain/combat';
 import { validatePolicy, type Capabilities } from '../domain/config';
 import { guardSpawnNeed } from '../domain/combat';
 import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
@@ -7,7 +8,7 @@ import { runLogistics, runMinerals, runMiners } from './logistics';
 import { driveLabs } from './labs';
 import { runMarket } from './market';
 import { driveFactory } from './factory';
-import { driveGuards, runDefense } from './defense';
+import { driveGuards, driveHealers, runDefense } from './defense';
 import { driveLinks } from './links';
 import { flushTraffic, requestMove } from './traffic';
 import { driveClaimers, driveColonizers, drivePioneers, driveRemoteMining, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
@@ -161,6 +162,7 @@ export function runBootstrap(): void {
     isolate(state, room.name, () => {
       isolate(state, 'defense', () => runDefense(room, policy.policy.allies));
       isolate(state, 'guard', () => driveGuards(room, policy.policy.allies));
+      isolate(state, 'healer', () => driveHealers(room, policy.policy.allies));
       isolate(state, 'links', () => driveLinks(room));
       const sources = room.find(FIND_SOURCES);
       const roomCreeps = room.find(FIND_MY_CREEPS);
@@ -215,6 +217,13 @@ export function runBootstrap(): void {
             losses: Memory.guardLoss?.[room.name]?.count ?? 0,
           });
           if (guardNeed) idle.spawnCreep([ATTACK, ATTACK, MOVE, MOVE], `guard-${room.name}-${Game.time}`, { memory: { role: 'guard' } });
+          else if (healerSpawnNeed({
+            hostiles: armedHostiles.map(c => ({ armed: c.body.filter(p => p.type === ATTACK || p.type === RANGED_ATTACK).length, hits: c.hits })),
+            guards: guards.length,
+            healers: Object.values(Game.creeps).filter(c => c.memory.role === 'healer' && c.room.name === room.name).length,
+            healerTtl: (() => { const t = Object.values(Game.creeps).filter(c => c.memory.role === 'healer' && c.room.name === room.name).map(c => c.ticksToLive ?? 0); return t.length ? Math.max(...t) : undefined; })(),
+            capacity: room.energyCapacityAvailable, energyAvailable: room.energyAvailable,
+          })) idle.spawnCreep([HEAL, HEAL, MOVE, MOVE], `healer-${room.name}-${Game.time}`, { memory: { role: 'healer' } });
           else {
           const containers = room.find(FIND_STRUCTURES).filter(s => s.structureType === STRUCTURE_CONTAINER);
           const need = minerSpawnNeed({ capacity: room.energyCapacityAvailable, energyAvailable: room.energyAvailable,
