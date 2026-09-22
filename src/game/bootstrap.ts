@@ -5,6 +5,7 @@ import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { runLogistics, runMinerals, runMiners } from './logistics';
 import { driveLabs } from './labs';
+import { runMarket } from './market';
 import { driveGuards, runDefense } from './defense';
 import { driveLinks } from './links';
 import { flushTraffic, requestMove } from './traffic';
@@ -296,6 +297,7 @@ export function runBootstrap(): void {
       if (Memory.logisticsEnabled === true) isolate(state, 'miners', () => runMiners(room, sources));
       if (Memory.logisticsEnabled === true) isolate(state, 'minerals', () => runMinerals(room));
       if (Memory.logisticsEnabled === true) isolate(state, 'labs', () => driveLabs(room));
+      if (Memory.logisticsEnabled === true) isolate(state, 'market', () => runMarket(room));
       isolate(state, 'intel-eval', () => runEvaluation(room.name));
       creeps.sort((a, b) => a.name.localeCompare(b.name));
       for (let j = 0; j < creeps.length; j++) {

@@ -38,11 +38,13 @@ assert(!storageProbe || lifecycle && logistics && !construction && !fairnessProb
 const linksProbe = args.includes('--links-probe');
 assert(!linksProbe || lifecycle && logistics && !construction && !fairnessProbe, '--links-probe requires --lifecycle --logistics');
 const labsProbe = args.includes('--labs-probe');
+const marketProbe = args.includes('--market-probe');
 const mineralProbe = args.includes('--mineral-probe');
 const linkplaceProbe = args.includes('--linkplace-probe');
 assert(!linkplaceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--linkplace-probe requires --lifecycle --logistics');
 assert(!mineralProbe || lifecycle && logistics && !construction && !fairnessProbe, '--mineral-probe requires --lifecycle --logistics');
 assert(!labsProbe || lifecycle && logistics && !construction && !fairnessProbe, '--labs-probe requires --lifecycle --logistics');
+assert(!marketProbe || labsProbe, '--market-probe requires --labs-probe (market rides the labs fixture)');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -65,9 +67,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -357,6 +359,24 @@ try {
     });
     report.labsProbeState = { mineralAt: [30, 20], terminalAt: [23, 23] };
   }
+  if (marketProbe) {
+    // 造市:邻室 W0N2 放 NPC terminal(持 H、有能量、容量留白),db['market.orders']
+    // 挂两单——买 UH(1.5 credits)与卖 H(0.5 credits;库价 ×1000 存放,读回 /1000)。
+    // home terminal 预置 UH 600(> 400 卖出门槛)与 H 30(< 60 买入触发);
+    // lab→terminal 搬运腿受 mockup withdraw 怪癖所限,留真机验证。
+    await server.world.addRoom('W0N2');
+    await server.world.setTerrain('W0N2', new TerrainMatrix());
+    await db.users.insert({ _id: 'npc-market', username: 'npc-market', money: 2000000 });
+    await server.world.addRoomObject('W0N2', 'terminal', 25, 25, {
+      user: 'npc-market', store: { energy: 20000, H: 2000 }, storeCapacity: 30000, hits: 3000, hitsMax: 3000,
+    });
+    await db['market.orders'].insert([
+      { _id: 'order-buy-uh', created: 0, user: 'npc-market', active: true, type: 'buy', resourceType: 'UH', price: 1500, amount: 5000, remainingAmount: 5000, totalAmount: 5000, roomName: 'W0N2' },
+      { _id: 'order-sell-h', created: 0, user: 'npc-market', active: true, type: 'sell', resourceType: 'H', price: 500, amount: 2000, remainingAmount: 2000, totalAmount: 2000, roomName: 'W0N2' },
+    ]);
+    await db['rooms.objects'].update({ type: 'terminal', room: fixture.room }, { $set: { store: { energy: 3000, U: 600, H: 30, UH: 600 }, storeCapacity: 30000 } });
+    await db.users.update({ _id: bot.id }, { $set: { money: 0 } });
+  }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
     // builders get 2-WORK bodies; the AI must place and finish the remaining two.
@@ -610,6 +630,17 @@ try {
       }
       const rivals = objs.filter(o => o.type === 'constructionSite' && !['link', 'terminal', 'extractor', 'lab'].includes(o.structureType)).map(o => o._id);
       if (rivals.length) await db['rooms.objects'].removeWhere({ _id: { $in: rivals } });
+    }
+    if (marketProbe && i === Math.floor(tickCount / 2)) {
+      // 中窗取证:买卖腿应已在 t100/t200 完成——留一份台账进 report。
+      const our = await db.users.findOne({ _id: bot.id });
+      const npc = await db.users.findOne({ _id: 'npc-market' });
+      const orders = await db['market.orders'].find({});
+      report.marketMidpoint = {
+        ourMoney: our.money ?? null, npcMoney: npc.money ?? null,
+        buyUH: orders.find(o => o._id === 'order-buy-uh')?.remainingAmount ?? null,
+        sellH: orders.find(o => o._id === 'order-sell-h')?.remainingAmount ?? null,
+      };
     }
     if (labsProbe && i % 25 === 0) {
       // 同 mineral-probe 判例:被测设施(link/terminal/extractor/lab)进度
@@ -1031,8 +1062,25 @@ try {
         && labs.every(l => cheb(l, report.labsProbeState.terminalAt) <= 3));
       const outLab = labs.map(l => (l.store?.UH ?? 0)).reduce((s, v) => Math.max(s, v), 0);
       check('reaction chain produces UH into the output lab', outLab > 0);
-      const inputsFed = labs.some(l => (l.store?.U ?? 0) > 0) && labs.some(l => (l.store?.H ?? 0) > 0);
-      check('courier feeds both input labs from terminal', inputsFed);
+      // 输入 lab 会被反应正常耗尽(H 100→0→补种循环)——"终帧有料"是瞬态,
+      // 断言改为全程曾见(供料发生过),不被耗尽节奏背锅。
+      const everU = report.ticks.some(t => t.objects.some(o => o.type === 'lab' && (o.store?.U ?? 0) > 0));
+      const everH = report.ticks.some(t => t.objects.some(o => o.type === 'lab' && (o.store?.H ?? 0) > 0));
+      check('courier feeds both input labs from terminal', everU && everH);
+    }
+    if (marketProbe) {
+      const mid = report.marketMidpoint ?? {};
+      const terminalEver = (pred) => report.ticks.some(t => { const term = t.objects.find(o => o.type === 'terminal' && o.user !== undefined); return term ? pred(term) : false; });
+      // 卖:home 把 UH 多余额卖给 1.5 credits 的买单,credits 到账(库价 ×1000)
+      check('home sells surplus UH and earns credits', (mid.ourMoney ?? 0) > 500000);
+      // 买:H 低于触发线,从 0.5 credits 的卖单补进 terminal
+      check('home buys missing H input, spending credits', (mid.npcMoney ?? 2000000) !== 2000000 && (mid.sellH ?? 2000) < 2000);
+      // 订单簿被真实消耗
+      check('market orders drain', (mid.buyUH ?? 5000) < 5000 && (mid.sellH ?? 2000) < 2000);
+      // 买回的 H 真的落在 home terminal 里
+      check('bought H lands in the home terminal', terminalEver(t => (t.store?.H ?? 0) >= 60));
+      // 卖出后 UH 降至保留量附近(库存换钱,不留囤积)
+      check('UH surplus leaves the terminal', terminalEver(t => (t.store?.UH ?? 0) <= 100));
     }
     if (mineralProbe) {
       const good = [...report.ticks].reverse().find(t => t.objects.some(o => o.type === 'terminal' && o.hits > 0)) ?? report.ticks.at(-1);
