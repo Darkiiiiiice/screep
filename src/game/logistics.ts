@@ -4,8 +4,9 @@ import { rankServices, settleService, type ServiceState } from '../domain/servic
 import { REPAIR_THRESHOLD, selectRepairTarget } from '../domain/maintenance';
 import { type TrafficState } from '../domain/traffic';
 import { requestMove as travel } from './traffic';
-import { extensionTiles, extractorSite, labSite, linkSite, preservesConnectivity, terminalSite } from '../domain/planning';
+import { extensionTiles, extractorSite, factorySite, labSite, linkSite, preservesConnectivity, terminalSite } from '../domain/planning';
 import { LAB_INPUT_LACK } from '../domain/labs';
+import { FACTORY_MINERAL_FLOOR } from '../domain/factory';
 import { currentRecipe, labMineral, terminalStock } from './labs';
 
 declare global {
@@ -207,6 +208,9 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   const labCap = CONTROLLER_STRUCTURES[STRUCTURE_LAB]?.[rcl] ?? 0;
   const labOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_LAB).length;
   const labPlanned = allSites.filter(s => s.structureType === STRUCTURE_LAB).length;
+  const factoryCap = CONTROLLER_STRUCTURES[STRUCTURE_FACTORY]?.[rcl] ?? 0;
+  const factoryOwned = room.find(FIND_MY_STRUCTURES).filter(s => s.structureType === STRUCTURE_FACTORY).length;
+  const factoryPlanned = allSites.filter(s => s.structureType === STRUCTURE_FACTORY).length;
   // Stage order: extensions to the base economy (5) → tower (defense) → storage
   // (RCL4 buffer). Placement keys on OWNED progress; a tower that exists as a
   // site unlocks storage, and once the tower is owned or placed the extension
@@ -218,24 +222,28 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     extensionCap - extensionOwned - extensionPlanned > 0 && extensionOwned < 5 ? STRUCTURE_EXTENSION
     : towerCap - towerOwned - towerPlanned > 0 ? STRUCTURE_TOWER
     : (towerOwned + towerPlanned > 0) && storageCap - storageOwned - storagePlanned > 0 ? STRUCTURE_STORAGE
-    : (towerOwned + towerPlanned > 0) && linkCap - linkOwned - linkPlanned > 0 ? STRUCTURE_LINK
+    // link 段上限钳到"每源一条+中枢一条":RCL7+ 的 linkCap(6) 超出本房
+    // 可用锚位时,linkSite 返回 undefined、段永不闭合,影子遮住后段
+    // (extractor/lab/factory)——线上 RCL7 会整链停摆(探针实证)。
+    : (towerOwned + towerPlanned > 0) && linkCap - linkOwned - linkPlanned > 0 && linkOwned + linkPlanned < sources.length + 1 ? STRUCTURE_LINK
     : (towerOwned + towerPlanned > 0) && terminalCap - terminalOwned - terminalPlanned > 0 && storageOwned > 0 ? STRUCTURE_TERMINAL
     : (towerOwned + towerPlanned > 0) && extractorCap - extractorOwned - extractorPlanned > 0 ? STRUCTURE_EXTRACTOR
     : (towerOwned + towerPlanned > 0) && labCap - labOwned - labPlanned > 0 ? STRUCTURE_LAB
+    : (towerOwned + towerPlanned > 0) && factoryCap - factoryOwned - factoryPlanned > 0 && labCap - labOwned - labPlanned <= 0 ? STRUCTURE_FACTORY
     : (towerOwned + towerPlanned > 0) && extensionCap - extensionOwned - extensionPlanned > 0 && extensionPlanned < 3 ? STRUCTURE_EXTENSION
       : undefined;
   const growthOwned = growthType === STRUCTURE_EXTENSION ? extensionOwned
     : growthType === STRUCTURE_TOWER ? towerOwned : growthType === STRUCTURE_LINK ? linkOwned
     : growthType === STRUCTURE_TERMINAL ? terminalOwned : growthType === STRUCTURE_EXTRACTOR ? extractorOwned
-    : growthType === STRUCTURE_LAB ? labOwned : storageOwned;
+    : growthType === STRUCTURE_LAB ? labOwned : growthType === STRUCTURE_FACTORY ? factoryOwned : storageOwned;
   const growthPlanned = growthType === STRUCTURE_EXTENSION ? extensionPlanned
     : growthType === STRUCTURE_TOWER ? towerPlanned : growthType === STRUCTURE_LINK ? linkPlanned
     : growthType === STRUCTURE_TERMINAL ? terminalPlanned : growthType === STRUCTURE_EXTRACTOR ? extractorPlanned
-    : growthType === STRUCTURE_LAB ? labPlanned : storagePlanned;
+    : growthType === STRUCTURE_LAB ? labPlanned : growthType === STRUCTURE_FACTORY ? factoryPlanned : storagePlanned;
   const growthCap = growthType === STRUCTURE_EXTENSION ? extensionCap
     : growthType === STRUCTURE_TOWER ? towerCap : growthType === STRUCTURE_LINK ? linkCap
     : growthType === STRUCTURE_TERMINAL ? terminalCap : growthType === STRUCTURE_EXTRACTOR ? extractorCap
-    : growthType === STRUCTURE_LAB ? labCap : storageCap;
+    : growthType === STRUCTURE_LAB ? labCap : growthType === STRUCTURE_FACTORY ? factoryCap : storageCap;
   if (miningSelfSufficient && growthType && growthCap - growthOwned - growthPlanned > 0 && spawns[0]) {
     const free = (x: number, y: number) => {
       const position = new RoomPosition(x, y, room.name);
@@ -294,6 +302,19 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
         free,
       });
       if (site && preservesConnectivity(site, passable)) room.createConstructionSite(site.x, site.y, STRUCTURE_LAB);
+    } else if (growthType === STRUCTURE_FACTORY) {
+      const site = factorySite({
+        anchor: (() => {
+          const anchor = room.find(FIND_MY_STRUCTURES).find((s): s is StructureTerminal => s.structureType === STRUCTURE_TERMINAL);
+          return anchor ? { x: anchor.pos.x, y: anchor.pos.y } : undefined;
+        })(),
+        factories: [
+          ...room.find(FIND_MY_STRUCTURES).filter((s): s is StructureFactory => s.structureType === STRUCTURE_FACTORY).map(f => ({ x: f.pos.x, y: f.pos.y })),
+          ...allSites.filter(s => s.structureType === STRUCTURE_FACTORY).map(f => ({ x: f.pos.x, y: f.pos.y })),
+        ],
+        free,
+      });
+      if (site && preservesConnectivity(site, passable)) room.createConstructionSite(site.x, site.y, STRUCTURE_FACTORY);
     } else {
     for (const tile of extensionTiles({ x: spawns[0].pos.x, y: spawns[0].pos.y }, free, 8)) {
       if (!preservesConnectivity(tile, passable)) continue;
@@ -624,13 +645,19 @@ export function runMinerals(room: Room): void {
       (labMineral(lab) === undefined || labMineral(lab) === res)
       && ((lab.store.getUsedCapacity(res as ResourceConstant) ?? 0) < LAB_INPUT_LACK);
     if (carriedType) {
-      // 供料半程:手里是配方输入且任一可收 lab 缺料 → 送 lab;否则回落 terminal。
-      const recipe = currentRecipe(terminalStock(terminal));
-      const target = recipe && recipe.inputs.includes(carriedType)
-        ? labs.find(l => canAccept(l, carriedType))
-        : undefined;
-      if (target && harvester.transfer(target, carriedType as ResourceConstant) === ERR_NOT_IN_RANGE) travel(harvester, target.pos, 1);
-      else if (harvester.transfer(terminal, carriedType as ResourceConstant) === ERR_NOT_IN_RANGE) travel(harvester, terminal.pos, 1);
+      // 供料半程,优先级:factory 缺矿(压条线,M6-7)→ 配方可收 lab → terminal。
+      const factory = room.find(FIND_MY_STRUCTURES).find((s): s is StructureFactory => s.structureType === STRUCTURE_FACTORY);
+      const factoryHungry = factory && carriedType !== RESOURCE_ENERGY
+        && ((factory.store.getUsedCapacity(carriedType as ResourceConstant) ?? 0) < FACTORY_MINERAL_FLOOR);
+      if (factoryHungry && harvester.transfer(factory, carriedType as ResourceConstant) === ERR_NOT_IN_RANGE) travel(harvester, factory.pos, 1);
+      else if (!factoryHungry) {
+        const recipe = currentRecipe(terminalStock(terminal));
+        const target = recipe && recipe.inputs.includes(carriedType)
+          ? labs.find(l => canAccept(l, carriedType))
+          : undefined;
+        if (target && harvester.transfer(target, carriedType as ResourceConstant) === ERR_NOT_IN_RANGE) travel(harvester, target.pos, 1);
+        else if (harvester.transfer(terminal, carriedType as ResourceConstant) === ERR_NOT_IN_RANGE) travel(harvester, terminal.pos, 1);
+      }
       continue;
     }
     // 取货半程:仅在恰已站在 terminal 旁时顺路捎带——不为取料专门跑腿

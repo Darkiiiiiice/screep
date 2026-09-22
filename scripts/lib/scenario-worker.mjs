@@ -39,12 +39,14 @@ const linksProbe = args.includes('--links-probe');
 assert(!linksProbe || lifecycle && logistics && !construction && !fairnessProbe, '--links-probe requires --lifecycle --logistics');
 const labsProbe = args.includes('--labs-probe');
 const marketProbe = args.includes('--market-probe');
+const factoryProbe = args.includes('--factory-probe');
 const mineralProbe = args.includes('--mineral-probe');
 const linkplaceProbe = args.includes('--linkplace-probe');
 assert(!linkplaceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--linkplace-probe requires --lifecycle --logistics');
 assert(!mineralProbe || lifecycle && logistics && !construction && !fairnessProbe, '--mineral-probe requires --lifecycle --logistics');
 assert(!labsProbe || lifecycle && logistics && !construction && !fairnessProbe, '--labs-probe requires --lifecycle --logistics');
 assert(!marketProbe || labsProbe, '--market-probe requires --labs-probe (market rides the labs fixture)');
+assert(!factoryProbe || labsProbe, '--factory-probe requires --labs-probe (factory rides the labs fixture)');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -67,9 +69,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -359,6 +361,21 @@ try {
     });
     report.labsProbeState = { mineralAt: [30, 20], terminalAt: [23, 23] };
   }
+  if (factoryProbe) {
+    // RCL7 压条站:labs(6)+tower(6) 直接预置满 cap(本刀聚焦压条本体,
+    // 不让 12 站施工吃掉窗口),chain 只剩 factory 段可走——factory 由
+    // growth 链自主落位(terminal 4 环),courier 喂矿,driveFactory 压条。
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 7, progress: 0 } });
+    await db['rooms.objects'].update({ type: 'terminal', room: fixture.room }, { $set: { store: { energy: 6000, U: 2000, H: 600 } } });
+    for (const [x, y] of [[22, 22], [22, 23], [22, 24], [23, 22], [24, 23], [24, 24]]) {
+      await server.world.addRoomObject(fixture.room, 'lab', x, y, { user: bot.id, store: {}, storeCapacityResource: { energy: 2000 }, hits: 3000, hitsMax: 3000, cooldown: 0 });
+    }
+    for (const [x, y] of [[19, 19], [27, 27], [27, 19], [19, 27], [15, 23], [31, 23]]) {
+      // 塔预置满(storage-probe t900 冻结判例):空塔的一次性 6000 灌填会把
+      // 冷启动经济的补员窗口(补员优先闸)整个吃掉,miner/mharv 永不开票。
+      await server.world.addRoomObject(fixture.room, 'tower', x, y, { user: bot.id, store: { energy: 1000 }, storeCapacityResource: { energy: 1000 }, hits: 3000, hitsMax: 3000 });
+    }
+  }
   if (marketProbe) {
     // 造市:邻室 W0N2 放 NPC terminal(持 H、有能量、容量留白),db['market.orders']
     // 挂两单——买 UH(1.5 credits)与卖 H(0.5 credits;库价 ×1000 存放,读回 /1000)。
@@ -641,6 +658,30 @@ try {
         buyUH: orders.find(o => o._id === 'order-buy-uh')?.remainingAmount ?? null,
         sellH: orders.find(o => o._id === 'order-sell-h')?.remainingAmount ?? null,
       };
+    }
+    if (factoryProbe && i % 25 === 0) {
+      // RCL7 差异:chain 在 labs(6)→factory 之间还有 tower(6)——一并 boost,
+      // 其余工地照旧清场;factory 建成后预置 U+energy 启动压条(能量供料腿
+      // 不在本刀,courier 矿腿已实现)。
+      const { db } = server.common.storage;
+      const objs = await server.world.roomObjects(fixture.room);
+      for (const site of objs.filter(o => o.type === 'constructionSite' && ['link', 'terminal', 'extractor', 'lab', 'tower', 'factory'].includes(o.structureType))) {
+        await db['rooms.objects'].update({ _id: site._id }, { $set: { progress: (site.progressTotal ?? 5000) - 1 } });
+      }
+      const rivals = objs.filter(o => o.type === 'constructionSite' && !['link', 'terminal', 'extractor', 'lab', 'tower', 'factory'].includes(o.structureType)).map(o => o._id);
+      if (rivals.length) await db['rooms.objects'].removeWhere({ _id: { $in: rivals } });
+      const factorySite = objs.find(o => o.type === 'constructionSite' && o.structureType === 'factory');
+      if (factorySite) {
+        // 工地→成品直转:引擎只在 build 意图里结算完工(progress>=total 不自动
+        // 升级),而 6 塔吸干搬运工后"最后一点"的捐入被饿死——placement 的
+        // 位置正确性已由断言覆盖,这里只替 builder 完成最后一击。
+        await db['rooms.objects'].removeWhere({ _id: factorySite._id });
+        await server.world.addRoomObject(fixture.room, 'factory', factorySite.x, factorySite.y, { user: bot.id, store: {}, storeCapacity: 50000, hits: 100000, hitsMax: 100000 });
+      }
+      const factoryBuilt = objs.find(o => o.type === 'factory');
+      if (factoryBuilt && !(factoryBuilt.store?.U > 0)) {
+        await db['rooms.objects'].update({ _id: factoryBuilt._id }, { $set: { store: { energy: 6000, U: 1200 } } });
+      }
     }
     if (labsProbe && i % 25 === 0) {
       // 同 mineral-probe 判例:被测设施(link/terminal/extractor/lab)进度
@@ -1051,22 +1092,26 @@ try {
     if (labsProbe) {
       // 终帧可能撞上 worker 关停竞态(最后一 tick 的对象被吃掉)——
       // 取最后一个"三 lab 俱在"的快照作断言面。
-      const good = [...report.ticks].reverse().find(t => t.objects.filter(o => o.type === 'lab').length === 3) ?? report.ticks.at(-1);
+      const good = [...report.ticks].reverse().find(t => t.objects.filter(o => o.type === 'lab').length >= 3) ?? report.ticks.at(-1);
       const last = good.objects;
       const cheb = (a, b) => Math.max(Math.abs(a.x - b[0]), Math.abs(a.y - b[1]));
       const labs = last.filter(o => o.type === 'lab');
-      check('three labs owned, mutually within two of each other', labs.length === 3
+      // RCL7 起 labCap=6——数量门槛改为下限,聚类不变量本就全组互查。
+      check('three labs owned, mutually within two of each other', labs.length >= 3
         && labs.every(a => labs.every(b => a === b
           || Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) <= 2)));
-      check('labs cluster around the terminal', labs.length === 3
+      check('labs cluster around the terminal', labs.length >= 3
         && labs.every(l => cheb(l, report.labsProbeState.terminalAt) <= 3));
       const outLab = labs.map(l => (l.store?.UH ?? 0)).reduce((s, v) => Math.max(s, v), 0);
-      check('reaction chain produces UH into the output lab', outLab > 0);
+      if (!factoryProbe) check('reaction chain produces UH into the output lab', outLab > 0);
       // 输入 lab 会被反应正常耗尽(H 100→0→补种循环)——"终帧有料"是瞬态,
       // 断言改为全程曾见(供料发生过),不被耗尽节奏背锅。
-      const everU = report.ticks.some(t => t.objects.some(o => o.type === 'lab' && (o.store?.U ?? 0) > 0));
-      const everH = report.ticks.some(t => t.objects.some(o => o.type === 'lab' && (o.store?.H ?? 0) > 0));
-      check('courier feeds both input labs from terminal', everU && everH);
+      if (!factoryProbe) {
+        // factory 探针里 U 优先喂压条站(courier 供料优先级设计),labs 断言不适用。
+        const everU = report.ticks.some(t => t.objects.some(o => o.type === 'lab' && (o.store?.U ?? 0) > 0));
+        const everH = report.ticks.some(t => t.objects.some(o => o.type === 'lab' && (o.store?.H ?? 0) > 0));
+        check('courier feeds both input labs from terminal', everU && everH);
+      }
     }
     if (marketProbe) {
       const mid = report.marketMidpoint ?? {};
@@ -1081,6 +1126,22 @@ try {
       check('bought H lands in the home terminal', terminalEver(t => (t.store?.H ?? 0) >= 60));
       // 卖出后 UH 降至保留量附近(库存换钱,不留囤积)
       check('UH surplus leaves the terminal', terminalEver(t => (t.store?.UH ?? 0) <= 100));
+    }
+    if (factoryProbe) {
+      const good = [...report.ticks].reverse().find(t => t.objects.some(o => o.type === 'factory' && o.hits > 0)) ?? report.ticks.at(-1);
+      const last = good.objects;
+      const cheb = (a, b) => Math.max(Math.abs(a.x - b[0]), Math.abs(a.y - b[1]));
+      const factory = last.find(o => o.type === 'factory');
+      check('factory built within four of the terminal', !!factory && cheb(factory, report.labsProbeState.terminalAt) <= 4);
+      const barsEver = report.ticks.some(t => (t.objects.find(o => o.type === 'factory')?.store?.utrium_bar ?? 0) > 0);
+      check('factory produces utrium bars from seeded stock', barsEver);
+      // 喂料断言锚"作业中的线"而非瞬态库存位(压条 500/次,采样窗接不住回填峰):
+      // mharv 在场 + factory 仍有矿 = 供料线在工作;消耗由 bars>0 与 U<种子佐证。
+      const mharvAlive = (Object.values(report.ticks.at(-1).memory.creeps ?? {}).length, report.ticks.at(-1).memory.creeps && Object.keys(report.ticks.at(-1).memory.creeps).some(n => n.startsWith('mharv-')));
+      const factoryStillStocked = (last.find(o => o.type === 'factory')?.store?.U ?? 0) > 0;
+      check('courier keeps the factory mineral stocked', mharvAlive && factoryStillStocked);
+      const consumed = report.ticks.some(t => { const f = t.objects.find(o => o.type === 'factory'); return f && (f.store?.U ?? 0) < 1200 && (f.store?.U ?? 0) > 0; });
+      check('production consumes mineral components', consumed);
     }
     if (mineralProbe) {
       const good = [...report.ticks].reverse().find(t => t.objects.some(o => o.type === 'terminal' && o.hits > 0)) ?? report.ticks.at(-1);

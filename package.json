@@ -49,7 +49,8 @@
     "test:linkplace": "npm run build && node scripts/scenario.mjs fresh --lifecycle --logistics --linkplace-probe",
     "test:mineral": "node scripts/scenario.mjs --lifecycle --logistics --mineral-probe",
     "test:labs": "node scripts/scenario.mjs --lifecycle --logistics --labs-probe",
-    "test:market": "node scripts/scenario.mjs --lifecycle --logistics --labs-probe --market-probe"
+    "test:market": "node scripts/scenario.mjs --lifecycle --logistics --labs-probe --market-probe",
+    "test:factory": "node scripts/scenario.mjs --lifecycle --logistics --labs-probe --factory-probe"
   },
   "dependencies": {
     "screeps-api": "^2.1.0"

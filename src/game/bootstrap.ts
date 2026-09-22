@@ -6,6 +6,7 @@ import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpa
 import { runLogistics, runMinerals, runMiners } from './logistics';
 import { driveLabs } from './labs';
 import { runMarket } from './market';
+import { driveFactory } from './factory';
 import { driveGuards, runDefense } from './defense';
 import { driveLinks } from './links';
 import { flushTraffic, requestMove } from './traffic';
@@ -280,7 +281,7 @@ export function runBootstrap(): void {
                           mineralAmount: mineral?.mineralAmount ?? 0,
                           harvesterAlive: Object.values(Game.creeps).some(c => c.memory.role === 'mharvester'),
                         });
-                        if (mNeed) idle.spawnCreep([WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], `mharv-${room.name}-${Game.time}`, { memory: { role: 'mharvester' } });
+                                                if (mNeed) idle.spawnCreep([WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], `mharv-${room.name}-${Game.time}`, { memory: { role: 'mharvester' } });
                       }
                     }
                   }
@@ -298,6 +299,7 @@ export function runBootstrap(): void {
       if (Memory.logisticsEnabled === true) isolate(state, 'minerals', () => runMinerals(room));
       if (Memory.logisticsEnabled === true) isolate(state, 'labs', () => driveLabs(room));
       if (Memory.logisticsEnabled === true) isolate(state, 'market', () => runMarket(room));
+      if (Memory.logisticsEnabled === true) isolate(state, 'factory', () => driveFactory(room));
       isolate(state, 'intel-eval', () => runEvaluation(room.name));
       creeps.sort((a, b) => a.name.localeCompare(b.name));
       for (let j = 0; j < creeps.length; j++) {
