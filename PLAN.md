@@ -396,6 +396,8 @@ flowchart TD
 
 - [x] M7:拆预留远征纵切(M7 第三刀,§3.8 远征链 v1 + §3.9"敌方预留->攻击控制器")。`evaluateRaidTargets`/`attackerSpawnNeed` 纯决策(他乡有效预定、无主、无武装威胁、情报新鲜、距离<=3,按折算余量升序;工人地板 4 + 容量/能量 650 + 死亡冷却 150);`driveRaiders`:行军->attackController 剥离(CLAIM 数*1 tick/次,range 1,ERR_NOT_IN_RANGE 走近)->拆完即自尽(预约真空交还 claimer 链),寻路抛错按不可达记账止损;死亡台账镜像 claimer(在册即移交,尽没才冷却);spawn 链第八顺位盈余(让位 mharv:产业经常收入先于远征一次性开销);intel 补 raiderActive/lastRaiderDeathAt/raiding 三字段。探针 `--raid-probe` 骑 market 夹具(RCL6 全产业 + W0N2 npc 持 5000-tick 预定):3000-tick 窗口内接力两兵(1863->2618,CLAIM 件寿命 600 实证)、榜单全程锁敌、终帧余量 1104 压过自然衰减线 2000(实剥 ~900 tick)。探针三座夹具坑实证:Memory 种子必须带 `logisticsEnabled:true` 与 `intel.schema:1`(否则情报层整体重置、物流层永不点火);mock 原生寻路对无地形条目的邻房直接抛 "Could not load terrain data"(邻环必须全量落位);tickCount 三元链按旗标求值顺序截断(raid 窗口曾被 labsProbe 2400 抢先截死)。
 
+- [x] M7:升级值勤(M7-4,线上提速实证驱动)。`upgradeDutyQuota` 纯决策:无工地+无降级紧急+spawn 存量 >=300 时,按名字序从闲置劳力切 3 条腿专跑控制器(保底留 2 条搬运腿伺候真实 sink);既有"升级是最后尾闾"不变式不变——真实需求经派单循环次 tick 即可 reclaim。病根(线上取证):spawn/ext 1300 容量缓冲 + 2.3/tick 机组/预定者磨耗形成永不满足的 sink 板,全部 10 个工人被派单吸干,升级只剩 0.36-0.5/tick(双快照实测),RCL4/GCL2 双闸门被拖成 40 小时/35 天;定班后预期 3-5/tick(50 货架通勤利用率 20%->90%),部署点 tick 83173372/progress 63454,前后同窗对比为验收据。maintenance 探针 stub 补 upgradeController 面(夹具补全,非改口径)。
+
 ## 6. 自动化验证与发布
 
 ### 6.1 验证层
