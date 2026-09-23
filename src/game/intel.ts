@@ -42,6 +42,8 @@ declare global {
     stuck?: number;
     /** 预定者目标房名(§3.9 CLAIM/RESERVE)。 */
     claimTarget?: string;
+    /** 攻击手目标房名(M7-3 拆预留远征)。 */
+    raidTarget?: string;
     /** 远程机组目标房名(§3.9 DEPLOY)。 */
     remoteTarget?: string;
     /** 殖民者目标房名(M5)。 */
@@ -91,7 +93,7 @@ export function maybeSpawnScout(room: Room, spawns: StructureSpawn[], workerSpaw
   idle?.spawnCreep([MOVE], `scout-${room.name}-${Game.time}`, { memory: { role: 'scout', home: room.name, visited: [] } });
 }
 
-function observeRoom(room: Room, allies: readonly string[]): RoomIntel {
+export function observeRoom(room: Room, allies: readonly string[]): RoomIntel {
   const armedParts: BodyPartConstant[] = [ATTACK, RANGED_ATTACK, HEAL, WORK, CLAIM];
   const hostiles = room.find(FIND_HOSTILE_CREEPS).filter(c => !allies.includes(c.owner?.username ?? ''));
   const towers = room.find(FIND_HOSTILE_STRUCTURES).filter(s =>

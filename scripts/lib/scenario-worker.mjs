@@ -41,6 +41,7 @@ const labsProbe = args.includes('--labs-probe');
 const marketProbe = args.includes('--market-probe');
 const factoryProbe = args.includes('--factory-probe');
 const squadProbe = args.includes('--squad-probe');
+const raidProbe = args.includes('--raid-probe');
 const mineralProbe = args.includes('--mineral-probe');
 const linkplaceProbe = args.includes('--linkplace-probe');
 assert(!linkplaceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--linkplace-probe requires --lifecycle --logistics');
@@ -49,6 +50,7 @@ assert(!labsProbe || lifecycle && logistics && !construction && !fairnessProbe, 
 assert(!marketProbe || labsProbe, '--market-probe requires --labs-probe (market rides the labs fixture)');
 assert(!factoryProbe || labsProbe, '--factory-probe requires --labs-probe (factory rides the labs fixture)');
 assert(!squadProbe || combatProbe, '--squad-probe requires --combat-probe (squad rides the combat fixture)');
+assert(!raidProbe || marketProbe, '--raid-probe requires --market-probe (raid rides the market fixture with its W0N2 + npc user)');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -62,7 +64,7 @@ assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
 assert(!remoteProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--remote-probe requires --lifecycle --logistics');
 assert(!colonizeProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe && !remoteProbe, '--colonize-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : linksProbe ? 600 : linkplaceProbe ? 1500 : mineralProbe ? 2400 : labsProbe ? 2400 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : linksProbe ? 600 : linkplaceProbe ? 1500 : mineralProbe ? 2400 : raidProbe ? 3000 : labsProbe ? 2400 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -71,9 +73,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -395,6 +397,33 @@ try {
     ]);
     await db['rooms.objects'].update({ type: 'terminal', room: fixture.room }, { $set: { store: { energy: 3000, U: 600, H: 30, UH: 600 }, storeCapacity: 30000 } });
     await db.users.update({ _id: bot.id }, { $set: { money: 0 } });
+  }
+  if (raidProbe) {
+    // 拆预留远征:W0N2 控制器挂 npc 预定(CLAIM 寿命 600 => 接力拆)。
+    // 邻环全量落位:mock 原生寻路对"无地形条目"的邻房直接抛错
+    // (claim 夹具判例,scout 会把缺地形的房标记不可达)——W0N2 本体由
+    // market 夹具已建,这里补齐其余七邻。
+    for (const name of ['W1N1', 'W1N0', 'W1N2', 'W0N0', 'E0N1', 'E0N0', 'E0N2']) {
+      await server.world.addRoom(name);
+      await server.world.setTerrain(name, new TerrainMatrix());
+    }
+    await server.world.addRoomObject('W0N2', 'controller', 25, 40, {
+      user: null, level: 0, reservation: { user: 'npc-market', endTime: 5000 }, ticksToEnd: 5000,
+    });
+    // 榜单硬过滤 sources>=1(远矿/殖民同一条候选管线):W0N2 需要真矿体。
+    for (const [x, y] of fixture.sources) {
+      await server.world.addRoomObject('W0N2', 'source', x, y, { energy: 3000, energyCapacity: 3000, nextRegenerationTime: 301 });
+    }
+    // intel 直种(scout 在重载探针经济里不可靠):W0N2 被占、余量 5000。
+    // 自然衰减到 t3000 剩 2000——终帧余量 < 2000 即为剥离证据(剥 1 tick/次)。
+    const env = server.common.storage.env;
+    await env.set(env.keys.MEMORY + bot.id, JSON.stringify({
+      logisticsEnabled: true,
+      intel: { schema: 1,
+        rooms: { W0N2: { observedAt: 0, sources: [{ id: 's1', x: 20, y: 20 }, { id: 's2', x: 30, y: 30 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'npc-market', reservationTicks: 5000 } } },
+        distances: { W0N2: 1 },
+      },
+    }));
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -1159,6 +1188,17 @@ try {
       // 卖出后 UH 降至保留量附近(库存换钱,不留囤积)
       check('UH surplus leaves the terminal', terminalEver(t => (t.store?.UH ?? 0) <= 100));
     }
+      if (raidProbe) {
+        // 拆预留远征验收:接力(CLAIM 件寿命 600,长单靠继任)、榜单锁敌、
+        // 剥离进度压过自然衰减线(5000-3000=2000)。
+        const raiderNames = new Set(report.ticks.flatMap(t => Object.keys(t.memory.creeps ?? {}).filter(n => n.startsWith('raider-'))));
+        check('raider relay deployed against the squatter', raiderNames.size >= 2);
+        const boardHit = report.ticks.some(t => ((t.memory.intel?.raiding?.targets) ?? []).some(x => x.name === 'W0N2'));
+        check('raid board locked the squatter', boardHit);
+        const lastTicks = [...report.ticks].reverse().find(t => (t.memory.intel?.rooms?.W0N2?.controller?.reservationTicks ?? null) !== null);
+        const finalTicks = lastTicks?.memory.intel.rooms.W0N2.controller.reservationTicks;
+        check('foreign reservation stripped past natural decay', typeof finalTicks === 'number' && finalTicks < 2000);
+      }
     if (factoryProbe) {
       const good = [...report.ticks].reverse().find(t => t.objects.some(o => o.type === 'factory' && o.hits > 0)) ?? report.ticks.at(-1);
       const last = good.objects;

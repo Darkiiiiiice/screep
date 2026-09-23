@@ -54,6 +54,9 @@ export interface IntelMemory {
  lastColonizerDeathAt?: number;
  /** 已占领殖民地台账:房名 → 占领/落成/灭队记录(M5-3 启动队消费令箭;
   * spawnedAt 落地即毕业交还本地循环;lastSquadCount 驱动灭队判定)。 */
+ raiderActive?: string;
+ lastRaiderDeathAt?: number;
+ raiding?: { tick: number; targets: { name: string; distance: number; effectiveTicks: number }[] };
  colonies?: Record<string, { claimedAt: number; spawnedAt?: number; lastPioneerWipeAt?: number; lastSquadCount?: number }>;
  /** 评估根房间:距离缓存全是根相对的,首评锚定,根房失守才重锚并清缓存
   * (否则殖民房入环后以殖民房为原点重算,双榜混入两套距离)。 */

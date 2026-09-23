@@ -4,6 +4,7 @@ import { validatePolicy, type Capabilities } from '../domain/config';
 import { guardSpawnNeed } from '../domain/combat';
 import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
+import { attackerSpawnNeed, evaluateRaidTargets } from '../domain/expedition';
 import { runLogistics, runMinerals, runMiners } from './logistics';
 import { driveLabs } from './labs';
 import { runMarket } from './market';
@@ -12,6 +13,7 @@ import { driveGuards, driveHealers, runDefense } from './defense';
 import { driveLinks } from './links';
 import { flushTraffic, requestMove } from './traffic';
 import { driveClaimers, driveColonizers, drivePioneers, driveRemoteMining, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
+import { driveRaiders } from './expedition';
 
 interface WorkerState {
   phase: 'collect' | 'deliver';
@@ -290,7 +292,21 @@ export function runBootstrap(): void {
                           mineralAmount: mineral?.mineralAmount ?? 0,
                           harvesterAlive: Object.values(Game.creeps).some(c => c.memory.role === 'mharvester'),
                         });
-                                                if (mNeed) idle.spawnCreep([WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], `mharv-${room.name}-${Game.time}`, { memory: { role: 'mharvester' } });
+                        if (mNeed) idle.spawnCreep([WORK, WORK, WORK, WORK, CARRY, CARRY, MOVE, MOVE, MOVE], `mharv-${room.name}-${Game.time}`, { memory: { role: 'mharvester' } });
+                        else {
+                          // 拆预留远征:第八顺位盈余(M7-3)。被他人有效预定的
+                          // 候选房堵住远矿/殖民两榜时,派 [CLAIM,MOVE] 去剥离
+                          // (attackController 每次剥 CLAIM 数*1 tick,接力制);
+                          // 让位 mharv:产业是经常收入,远征是一次性开销。
+                          const raidTargets = evaluateRaidTargets({ rooms: intelState().rooms, distances: intelState().distances ?? {}, me: idle.owner.username, now: Game.time });
+                          const raidTarget = attackerSpawnNeed({
+                            targets: raidTargets,
+                            attackerAlive: Object.values(Game.creeps).some(c => c.memory.role === 'raider'),
+                            workers: creeps.length, capacity: room.energyCapacityAvailable, energyAvailable: room.energyAvailable,
+                            lastDeathAt: intelState().lastRaiderDeathAt, now: Game.time,
+                          });
+                          if (raidTarget) idle.spawnCreep([CLAIM, MOVE], `raider-${room.name}-${Game.time}`, { memory: { role: 'raider', raidTarget } });
+                        }
                       }
                     }
                   }
@@ -325,6 +341,7 @@ export function runBootstrap(): void {
   isolate(state, 'intel', () => driveScouts(policy.policy.allies, executionLimit));
   isolate(state, 'claim', () => driveClaimers(policy.policy.allies, executionLimit));
   isolate(state, 'colonize', () => driveColonizers(policy.policy.allies, executionLimit));
+  isolate(state, 'raid', () => driveRaiders(policy.policy.allies, executionLimit));
   isolate(state, 'pioneer', () => drivePioneers(policy.policy.allies, executionLimit));
   isolate(state, 'remote', () => driveRemoteMining(executionLimit));
   state.rooms = { ...state.rooms, ...activeRooms };
