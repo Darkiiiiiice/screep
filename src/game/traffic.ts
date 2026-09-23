@@ -25,6 +25,8 @@ function passable(room: Room, x: number, y: number): boolean {
   for (const result of room.lookAt(x, y)) {
     if (result.type === 'terrain') { if (result.terrain === 'wall') return false; continue; }
     if (result.type === 'structure' && result.structure && OBSTACLE_STRUCTURES.has(result.structure.structureType)) return false;
+    // solid 工地自放置即障碍（M3 实证）；road/container 工地可站。
+    if (result.type === 'constructionSite' && result.constructionSite && OBSTACLE_STRUCTURES.has(result.constructionSite.structureType)) return false;
     if (result.type === 'source' || result.type === 'mineral' || result.type === 'deposit') return false;
   }
   return true;
