@@ -67,6 +67,9 @@ it('keeps per-room task memory isolated when sibling rooms run on shared memory'
   vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
   vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
   vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_ROAD', 'road');
+  vi.stubGlobal('STRUCTURE_RAMPART', 'rampart');
+  vi.stubGlobal('STRUCTURE_WALL', 'constructedWall');
   vi.stubGlobal('STRUCTURE_LINK', 'link');
   vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
   vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
@@ -124,6 +127,9 @@ it('appoints an upgrader in the downgrade recovery band despite fresh crumb prog
   vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
   vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
   vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_ROAD', 'road');
+  vi.stubGlobal('STRUCTURE_RAMPART', 'rampart');
+  vi.stubGlobal('STRUCTURE_WALL', 'constructedWall');
   vi.stubGlobal('STRUCTURE_LINK', 'link');
   vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
   vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
@@ -182,6 +188,9 @@ it('lease-held progress refreshes the clock and releases without reappointing in
   vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
   vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
   vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_ROAD', 'road');
+  vi.stubGlobal('STRUCTURE_RAMPART', 'rampart');
+  vi.stubGlobal('STRUCTURE_WALL', 'constructedWall');
   vi.stubGlobal('STRUCTURE_LINK', 'link');
   vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
   vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
@@ -222,6 +231,78 @@ it('lease-held progress refreshes the clock and releases without reappointing in
   // The old `handled.size === 0` assertion pinned the pre-surplus-duty idle
   // room; carrying workers now legitimately work (surplus upgrade) while the
   // released lease stays un-reappointed, which is the contract above.
+});
+
+it('never assigns a shipment to a geometrically sealed sink (live ext-seal incident)', () => {
+  // 线上事故钉板：扩展 8 邻域全是障碍结构 -> range-1 transfer 几何不可能，
+  // 派单板必须当它不存在（否则带能工人在它旁边退避-重派循环 250+ tick）。
+  class Position {
+    roomName: string;
+    constructor(public x: number, public y: number, room = 'W0N1') { this.roomName = room; }
+    getRangeTo() { return 5; }
+    isNearTo() { return false; }
+    inRangeTo() { return false; }
+    findClosestByRange() { return undefined; }
+    findPathTo() { return []; }
+  }
+  vi.stubGlobal('Game', { time: 1000, creeps: {} });
+  vi.stubGlobal('RoomPosition', Position);
+  vi.stubGlobal('Memory', {});
+  vi.stubGlobal('RESOURCE_ENERGY', 'energy');
+  vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
+  vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
+  vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_ROAD', 'road');
+  vi.stubGlobal('STRUCTURE_RAMPART', 'rampart');
+  vi.stubGlobal('STRUCTURE_WALL', 'constructedWall');
+  vi.stubGlobal('STRUCTURE_LINK', 'link');
+  vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
+  vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
+  vi.stubGlobal('STRUCTURE_FACTORY', 'factory');
+  vi.stubGlobal('STRUCTURE_LAB', 'lab');
+  vi.stubGlobal('FIND_MINERALS', 4);
+  vi.stubGlobal('StructureExtractor', class {});
+  vi.stubGlobal('STRUCTURE_TOWER', 'tower');
+  vi.stubGlobal('STRUCTURE_STORAGE', 'storage');
+  vi.stubGlobal('FIND_MY_STRUCTURES', 1);
+  vi.stubGlobal('FIND_MY_SPAWNS', 2);
+  vi.stubGlobal('FIND_MY_CONSTRUCTION_SITES', 3);
+  vi.stubGlobal('FIND_STRUCTURES', 4);
+  vi.stubGlobal('CONTROLLER_STRUCTURES', { extension: { 3: 0 }, tower: { 3: 0 }, storage: { 3: 0 } });
+  vi.stubGlobal('ERR_NOT_IN_RANGE', -10);
+  vi.stubGlobal('WORK', 'work');
+  vi.stubGlobal('OK', 0);
+  // 封印现场：ext-sealed (10,10) 的 8 邻域全是障碍结构。
+  const sealedRing = new Set(['9,9', '9,10', '9,11', '10,9', '10,11', '11,9', '11,10', '11,11']);
+  const sealedExt = {
+    id: 'ext-sealed', structureType: 'extension', pos: new Position(10, 10),
+    store: { energy: 0, getUsedCapacity: () => 0, getFreeCapacity: () => 50 },
+  };
+  const fullSpawn = {
+    id: 'spawn-full', structureType: 'spawn', pos: new Position(25, 25),
+    store: { energy: 300, getUsedCapacity: () => 300, getFreeCapacity: () => 0 },
+  };
+  const room = {
+    name: 'W0N1', energyAvailable: 300,
+    controller: { my: true, ticksToDowngrade: 20000, level: 3, pos: new Position(30, 30) },
+    lookAt: (x: number, y: number) => sealedRing.has(`${x},${y}`)
+      ? [{ type: 'structure', structure: { structureType: 'extension' } }, { type: 'terrain', terrain: 'plain' }]
+      : [{ type: 'terrain', terrain: 'plain' }],
+    find: (type: number) =>
+      type === 1 ? [fullSpawn, sealedExt] : type === 2 ? [fullSpawn] : [],
+  };
+  const worker = {
+    name: 'worker-a', spawning: false, memory: {} as Record<string, unknown>,
+    store: { energy: 50, getUsedCapacity: () => 50, getFreeCapacity: () => 0 },
+    pos: new Position(12, 12),
+    transfer: vi.fn(() => 0), withdraw: vi.fn(() => 0), upgradeController: vi.fn(() => 0),
+    harvest: vi.fn(() => 0), build: vi.fn(() => 0), repair: vi.fn(() => 0),
+    getActiveBodyparts: () => 1, fatigue: 0,
+  };
+  runLogistics(room as unknown as Room, [worker] as unknown as Creep[], [], {});
+  // 唯一有容量的 sink 是封印扩展 -> 不得形成任何派单/转移
+  expect(worker.memory.shipment).toBeUndefined();
+  expect(worker.transfer).not.toHaveBeenCalled();
 });
 
 describe('upgrade duty quota (M7-4)', () => {

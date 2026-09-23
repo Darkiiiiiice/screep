@@ -3,7 +3,7 @@ import { planEconomy } from '../domain/economy';
 import { rankServices, settleService, type ServiceState } from '../domain/service';
 import { REPAIR_THRESHOLD, selectRepairTarget } from '../domain/maintenance';
 import { type TrafficState } from '../domain/traffic';
-import { hasApproach, requestMove as travel } from './traffic';
+import { hasApproach, requestMove as travel, walkableAt } from './traffic';
 import { extensionTiles, extractorSite, factorySite, labSite, linkSite, preservesApproaches, preservesConnectivity, terminalSite } from '../domain/planning';
 import { LAB_INPUT_LACK } from '../domain/labs';
 import { FACTORY_MINERAL_FLOOR } from '../domain/factory';
@@ -61,7 +61,10 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   // competing with the running economy.
   const spawnBufferFull = room.find(FIND_MY_STRUCTURES).every(s =>
     (s.structureType !== STRUCTURE_SPAWN && s.structureType !== STRUCTURE_EXTENSION)
-    || s.store.getFreeCapacity(RESOURCE_ENERGY) === 0);
+    || s.store.getFreeCapacity(RESOURCE_ENERGY) === 0
+    // 几何封印的 spawn/ext 永远空着,不该否决 storage 缓冲(否则 M6-1 盈余入库
+    // 在 RCL4 永不启动——与 sinks 过滤同一份封印证据)。
+    || !hasApproach(room, s.pos));
   const sinks = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension | StructureTower | StructureStorage =>
     (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION || s.structureType === STRUCTURE_TOWER
       || (s.structureType === STRUCTURE_STORAGE && spawnBufferFull))
@@ -259,6 +262,22 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
         && !room.find(FIND_MINERALS).some(m => m.pos.x === x && m.pos.y === y);
     };
     const passable = (x: number, y: number) => x >= 0 && x < 50 && y >= 0 && y < 50 && free(x, y);
+    // 封印守卫双谓词：walkable=运行时可达(容器/道路可站)；needsApproach=需要 creep 贴身
+    // 的格(障碍结构与工地/源/矿；墙不需要——封住墙的邻环无害,墙格误拒会让单点选位卡死)。
+    const approachExempt: ReadonlySet<string> = new Set([STRUCTURE_ROAD, STRUCTURE_CONTAINER, STRUCTURE_RAMPART, STRUCTURE_WALL]);
+    const needsApproach = (x: number, y: number) => {
+      if (x < 0 || x > 49 || y < 0 || y > 49) return false;
+      const position = new RoomPosition(x, y, room.name);
+      if (position.lookFor(LOOK_STRUCTURES).some(st => !approachExempt.has(st.structureType))) return true;
+      if (position.lookFor(LOOK_CONSTRUCTION_SITES).some(st => !approachExempt.has(st.structureType))) return true;
+      if (sources.some(src => src.pos.x === x && src.pos.y === y)) return true;
+      return room.find(FIND_MINERALS).some(m => m.pos.x === x && m.pos.y === y);
+    };
+    const walkable = (x: number, y: number) => walkableAt(room, x, y);
+    const approachGuard = (tile: { x: number; y: number }) => preservesApproaches(tile, walkable, needsApproach);
+    // 单点选位(link/terminal/lab/factory)每 tick 确定性重算:守卫必须进选择器内部
+    // 带回退,否则首候选被外部拒绝=永久停摆(factory 探针实证)。
+    const placementGuard = (tile: { x: number; y: number }) => preservesConnectivity(tile, passable) && approachGuard(tile);
     // Scan a small candidate window: cut vertices (corridor/pocket entrances)
     // are skipped, then the first surviving tile gets the one site of this tick.
     // link(M6-3)不走 spawn 环——锚点是 source(源链)与 storage(中枢链):
@@ -276,13 +295,12 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
         sources: sources.map(src => ({ x: src.pos.x, y: src.pos.y })),
         containers: containers.map(c => ({ x: c.pos.x, y: c.pos.y })),
         storage: storageAnchor,
-        links: anchorLinks, capacity: linkCap, free, passable,
+        links: anchorLinks, capacity: linkCap, free, guard: approachGuard,
       });
       if (site) room.createConstructionSite(site.x, site.y, STRUCTURE_LINK);
     } else if (growthType === STRUCTURE_TERMINAL) {
-      const site = terminalSite({ storage: storageAnchor, links: anchorLinks, free, passable });
-      // 与扩展环同规:候选不得割裂 storage 周边(连通性守卫);封印守卫在选择器内部过滤。
-      if (site && preservesConnectivity(site, passable)) room.createConstructionSite(site.x, site.y, STRUCTURE_TERMINAL);
+      const site = terminalSite({ storage: storageAnchor, links: anchorLinks, free, guard: placementGuard });
+      if (site) room.createConstructionSite(site.x, site.y, STRUCTURE_TERMINAL);
     } else if (growthType === STRUCTURE_EXTRACTOR) {
       const site = extractorSite({
         minerals: room.find(FIND_MINERALS).map(m => ({ x: m.pos.x, y: m.pos.y })),
@@ -302,9 +320,9 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
           ...room.find(FIND_MY_STRUCTURES).filter((s): s is StructureLab => s.structureType === STRUCTURE_LAB).map(l => ({ x: l.pos.x, y: l.pos.y })),
           ...allSites.filter(s => s.structureType === STRUCTURE_LAB).map(l => ({ x: l.pos.x, y: l.pos.y })),
         ],
-        free, passable,
+        free, guard: placementGuard,
       });
-      if (site && preservesConnectivity(site, passable)) room.createConstructionSite(site.x, site.y, STRUCTURE_LAB);
+      if (site) room.createConstructionSite(site.x, site.y, STRUCTURE_LAB);
     } else if (growthType === STRUCTURE_FACTORY) {
       const site = factorySite({
         anchor: (() => {
@@ -315,12 +333,12 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
           ...room.find(FIND_MY_STRUCTURES).filter((s): s is StructureFactory => s.structureType === STRUCTURE_FACTORY).map(f => ({ x: f.pos.x, y: f.pos.y })),
           ...allSites.filter(s => s.structureType === STRUCTURE_FACTORY).map(f => ({ x: f.pos.x, y: f.pos.y })),
         ],
-        free, passable,
+        free, guard: placementGuard,
       });
-      if (site && preservesConnectivity(site, passable)) room.createConstructionSite(site.x, site.y, STRUCTURE_FACTORY);
+      if (site) room.createConstructionSite(site.x, site.y, STRUCTURE_FACTORY);
     } else {
     for (const tile of extensionTiles({ x: spawns[0].pos.x, y: spawns[0].pos.y }, free, 8)) {
-      if (!preservesConnectivity(tile, passable) || !preservesApproaches(tile, passable)) continue;
+      if (!placementGuard(tile)) continue;
       if (room.createConstructionSite(tile.x, tile.y, growthType) === OK) break;
     }
     }

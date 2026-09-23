@@ -16,6 +16,11 @@ function prepare(): void {
   }
 }
 
+/** 运行时可达判定：容器/道路可站，障碍结构/墙/源/矿不可站。 */
+export function walkableAt(room: Room, x: number, y: number): boolean {
+  return passable(room, x, y);
+}
+
 function passable(room: Room, x: number, y: number): boolean {
   for (const result of room.lookAt(x, y)) {
     if (result.type === 'terrain') { if (result.terrain === 'wall') return false; continue; }

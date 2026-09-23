@@ -70,6 +70,9 @@ function engineStub(containers: unknown[], sites: unknown[] = []) {
   vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
   vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
   vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_ROAD', 'road');
+  vi.stubGlobal('STRUCTURE_RAMPART', 'rampart');
+  vi.stubGlobal('STRUCTURE_WALL', 'constructedWall');
   vi.stubGlobal('STRUCTURE_LINK', 'link');
   vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
   vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');

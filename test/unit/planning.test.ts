@@ -63,32 +63,53 @@ describe('connectivity guard', () => {
 });
 
 describe('approach guard (sealed-sink prevention)', () => {
-  const ring = (open: (x: number, y: number) => boolean) => open;
+  // 测试模型里 blocked 一律视为"需要贴身的结构"：walkable=!blocked, needsApproach=blocked
+  const preds = (blocked: ReadonlySet<string>) => ({
+    walkable: (x: number, y: number) => !blocked.has(`${x},${y}`),
+    needs: (x: number, y: number) => blocked.has(`${x},${y}`),
+  });
 
   it('rejects the last open approach to a neighbor structure', () => {
     // 结构 S 在 (10,10)，其 8 邻域只剩 (11,11) 可及；在 (11,11) 放置会封印 S。
-    const open = ring((x, y) => !(x === 10 && y === 10) // S 本体不可通行
-      && !(Math.abs(x - 10) <= 1 && Math.abs(y - 10) <= 1 && !(x === 11 && y === 11)));
-    expect(preservesApproaches({ x: 11, y: 11 }, open)).toBe(false);
+    const blocked = new Set(['10,10', '9,9', '9,10', '9,11', '10,9', '10,11', '11,9', '11,10']);
+    const { walkable, needs } = preds(blocked);
+    expect(preservesApproaches({ x: 11, y: 11 }, walkable, needs)).toBe(false);
   });
 
   it('allows placement while any other approach stays open', () => {
-    const open = ring((x, y) => !(x === 10 && y === 10)
-      && !(Math.abs(x - 10) <= 1 && Math.abs(y - 10) <= 1 && !(x === 11 && y === 11) && !(x === 9 && y === 10)));
-    expect(preservesApproaches({ x: 11, y: 11 }, open)).toBe(true);
+    const blocked = new Set(['10,10', '9,9', '9,11', '10,9', '10,11', '11,9', '11,10']); // (9,10) 留作 S 的另一可及格
+    const { walkable, needs } = preds(blocked);
+    expect(preservesApproaches({ x: 11, y: 11 }, walkable, needs)).toBe(true);
+  });
+
+  it('rejects a candidate born with no walkable neighbour (born-sealed)', () => {
+    // 候选格 8 邻域全是结构：放在这里等于出生即封印（build/repair 都无法贴身）。
+    const blocked = new Set<string>();
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      if (dx || dy) blocked.add(`${20 + dx},${20 + dy}`);
+    }
+    const { walkable, needs } = preds(blocked);
+    expect(preservesApproaches({ x: 20, y: 20 }, walkable, needs)).toBe(false);
   });
 
   it('treats filling the last ring tile around a structure as a seal', () => {
     // 线上现场还原：扩展 (23,20) 的 8 邻域里 7 格已是结构，只剩 (23,19)。
     const blocked = new Set(['23,20', '24,20', '24,19', '22,19', '22,20', '23,21', '24,21', '22,21']);
-    const open = ring((x, y) => !blocked.has(`${x},${y}`));
+    const { walkable, needs } = preds(blocked);
     // 在最后一格 (23,19) 放置 -> (23,20) 的环全灭 -> 封印
-    expect(preservesApproaches({ x: 23, y: 19 }, open)).toBe(false);
+    expect(preservesApproaches({ x: 23, y: 19 }, walkable, needs)).toBe(false);
     // 若 (22,19) 也未占，则 (23,19) 放置后 (23,20) 仍可从 (22,19) 贴身 -> 放行
-    const open2 = ring((x, y) => !blocked.has(`${x},${y}`) || (x === 22 && y === 19));
-    expect(preservesApproaches({ x: 23, y: 19 }, open2)).toBe(true);
+    const open2 = preds(new Set([...blocked].filter(k => k !== '22,19')));
+    expect(preservesApproaches({ x: 23, y: 19 }, open2.walkable, open2.needs)).toBe(true);
     // 远处的放置不受影响
-    expect(preservesApproaches({ x: 30, y: 30 }, open)).toBe(true);
+    expect(preservesApproaches({ x: 30, y: 30 }, walkable, needs)).toBe(true);
+  });
+
+  it('ignores neighbours that need no approach (walls) even when ringed', () => {
+    // 候选旁只有"不需要贴身"的格：不约束放置。
+    const { walkable } = preds(new Set());
+    const wallNeeds = () => false;
+    expect(preservesApproaches({ x: 30, y: 30 }, walkable, wallNeeds)).toBe(true);
   });
 });
 
@@ -148,6 +169,9 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
   vi.stubGlobal('STRUCTURE_SPAWN', 'spawn');
   vi.stubGlobal('STRUCTURE_EXTENSION', 'extension');
   vi.stubGlobal('STRUCTURE_CONTAINER', 'container');
+  vi.stubGlobal('STRUCTURE_ROAD', 'road');
+  vi.stubGlobal('STRUCTURE_RAMPART', 'rampart');
+  vi.stubGlobal('STRUCTURE_WALL', 'constructedWall');
   vi.stubGlobal('STRUCTURE_LINK', 'link');
   vi.stubGlobal('STRUCTURE_TERMINAL', 'terminal');
   vi.stubGlobal('STRUCTURE_EXTRACTOR', 'extractor');
