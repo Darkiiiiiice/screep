@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { extensionTiles, extractorSite, labSite, linkSite, preservesConnectivity, spawnTile, terminalSite } from '../../src/domain/planning';
+import { extensionTiles, extractorSite, labSite, linkSite, preservesApproaches, preservesConnectivity, spawnTile, terminalSite } from '../../src/domain/planning';
 import { runLogistics } from '../../src/game/logistics';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -59,6 +59,36 @@ describe('connectivity guard', () => {
     const open = mask((x, y) => (x === 20 && y === 20) || (x === 21 && y === 20) || (x === 22 && y === 20));
     expect(preservesConnectivity({ x: 22, y: 20 }, open)).toBe(true);
     expect(preservesConnectivity({ x: 21, y: 20 }, open)).toBe(false);
+  });
+});
+
+describe('approach guard (sealed-sink prevention)', () => {
+  const ring = (open: (x: number, y: number) => boolean) => open;
+
+  it('rejects the last open approach to a neighbor structure', () => {
+    // 结构 S 在 (10,10)，其 8 邻域只剩 (11,11) 可及；在 (11,11) 放置会封印 S。
+    const open = ring((x, y) => !(x === 10 && y === 10) // S 本体不可通行
+      && !(Math.abs(x - 10) <= 1 && Math.abs(y - 10) <= 1 && !(x === 11 && y === 11)));
+    expect(preservesApproaches({ x: 11, y: 11 }, open)).toBe(false);
+  });
+
+  it('allows placement while any other approach stays open', () => {
+    const open = ring((x, y) => !(x === 10 && y === 10)
+      && !(Math.abs(x - 10) <= 1 && Math.abs(y - 10) <= 1 && !(x === 11 && y === 11) && !(x === 9 && y === 10)));
+    expect(preservesApproaches({ x: 11, y: 11 }, open)).toBe(true);
+  });
+
+  it('treats filling the last ring tile around a structure as a seal', () => {
+    // 线上现场还原：扩展 (23,20) 的 8 邻域里 7 格已是结构，只剩 (23,19)。
+    const blocked = new Set(['23,20', '24,20', '24,19', '22,19', '22,20', '23,21', '24,21', '22,21']);
+    const open = ring((x, y) => !blocked.has(`${x},${y}`));
+    // 在最后一格 (23,19) 放置 -> (23,20) 的环全灭 -> 封印
+    expect(preservesApproaches({ x: 23, y: 19 }, open)).toBe(false);
+    // 若 (22,19) 也未占，则 (23,19) 放置后 (23,20) 仍可从 (22,19) 贴身 -> 放行
+    const open2 = ring((x, y) => !blocked.has(`${x},${y}`) || (x === 22 && y === 19));
+    expect(preservesApproaches({ x: 23, y: 19 }, open2)).toBe(true);
+    // 远处的放置不受影响
+    expect(preservesApproaches({ x: 30, y: 30 }, open)).toBe(true);
   });
 });
 
@@ -151,6 +181,7 @@ function engineStub({ level, extensions = 0, sites = [] as unknown[], walls = {}
     name: 'W0N1',
     controller: { ticksToDowngrade: 20000, level },
     createConstructionSite,
+    lookAt: () => [],
     find: (kind: number) =>
       kind === 1 ? [] : kind === 2 ? [spawn, ...owned] : kind === 3 ? [spawn] : sites,
   };

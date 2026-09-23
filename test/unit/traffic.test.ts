@@ -21,3 +21,23 @@ it('backs off repeated blocked attempts, caps delay, and recovers after movement
   expect(recovered.failures).toBe(0);
   expect(recovered.retryAt).toBeUndefined();
 });
+
+it('continues the same stuck episode across a side-step anchor, resets beyond it', () => {
+  const anchored: TrafficState = { x: 10, y: 10, tick: 40, target: 'mine', stuck: 0, failures: 1, retryAt: 50, anchorX: 10, anchorY: 10 };
+  // 侧移后醒来：物理位置偏 1 格，锚点同目标 -> 同一卡死段落；退避期间 tick 断档，stuck 从醒来重算
+  const resumed = observeTraffic(anchored, 11, 10, 51, 'mine', false);
+  expect(resumed.stuck).toBe(0);
+  expect(resumed.failures).toBe(1);
+  expect(resumed.anchorX).toBe(10);
+  // 醒来后继续卡在同一锚点邻域 -> stuck 继续累积
+  expect(observeTraffic(resumed, 11, 10, 52, 'mine', false).stuck).toBe(1);
+  expect(resumed.failures).toBe(1);
+  expect(resumed.anchorX).toBe(10);
+  // 锚点目标不同 -> 新段落
+  expect(observeTraffic(anchored, 11, 10, 51, 'spawn', false).stuck).toBe(0);
+  // 离锚点超过 1 格 -> 真的走出来了，计数清零且锚点脱落
+  const free = observeTraffic(resumed, 13, 10, 52, 'mine', false);
+  expect(free.stuck).toBe(0);
+  expect(free.failures).toBe(0);
+  expect(free.anchorX).toBeUndefined();
+});

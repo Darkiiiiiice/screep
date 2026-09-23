@@ -6,6 +6,9 @@ export interface TrafficState {
   stuck: number;
   failures: number;
   retryAt?: number;
+  /** 侧移让位前的卡死原点：侧移是同一卡死段落的延续，不是新目标，stuck/failures 沿锚点续算。 */
+  anchorX?: number;
+  anchorY?: number;
 }
 
 export interface MoveRequest { name: string; from: string; to: string; priority: number }
@@ -38,13 +41,18 @@ export function arbitrateMoves(requests: MoveRequest[], occupants: Record<string
   return accepted;
 }
 
-/** Count only consecutive, unfatigued movement attempts towards the same goal. */
+/** Count only consecutive, unfatigued movement attempts towards the same goal.
+ * 锚点存在时，目标相同且仍在锚点 1 格邻域内视为同一卡死段落（侧移让位不清零升级计数）。 */
 export function observeTraffic(previous: TrafficState | undefined, x: number, y: number, tick: number, target: string, fatigued: boolean): TrafficState {
-  const same = previous?.x === x && previous.y === y && previous.target === target;
+  const same = previous !== undefined && previous.target === target &&
+    (previous.anchorX !== undefined
+      ? Math.abs(previous.anchorX - x) <= 1 && Math.abs(previous.anchorY! - y) <= 1
+      : previous.x === x && previous.y === y);
   const stuck = same && previous.tick === tick - 1 && !fatigued ? previous.stuck + 1 : 0;
   const failures = same ? previous.failures : 0;
   if (stuck >= 20) {
     return { x, y, tick, target, stuck: 0, failures: Math.min(6, failures + 1), retryAt: tick + Math.min(100, 10 * 2 ** failures) };
   }
-  return { x, y, tick, target, stuck, failures };
+  const anchor = previous?.anchorX !== undefined && previous.anchorY !== undefined ? { anchorX: previous.anchorX, anchorY: previous.anchorY } : {};
+  return same ? { x, y, tick, target, stuck, failures, ...anchor } : { x, y, tick, target, stuck, failures };
 }

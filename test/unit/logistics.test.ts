@@ -93,7 +93,8 @@ it('keeps per-room task memory isolated when sibling rooms run on shared memory'
     name,
     controller: { ticksToDowngrade: 20000 },
     createConstructionSite: () => 0,
-    find: (type: number) => type === 1 ? [{ structureType: 'spawn', id: 'spawn-id', store: { getFreeCapacity: () => 10 } }] : type === 2 ? [{ id: 'spawn-id' }] : [],
+    lookAt: () => [],
+    find: (type: number) => type === 1 ? [{ structureType: 'spawn', id: 'spawn-id', pos: new Position(25, 25, name), store: { getFreeCapacity: () => 10 } }] : type === 2 ? [{ id: 'spawn-id' }] : [],
   });
   runLogistics(room('W0N1') as unknown as Room, [creep('worker-a')] as unknown as Creep[], [], {});
   runLogistics(room('W0N2') as unknown as Room, [creep('worker-b')] as unknown as Creep[], [], {});

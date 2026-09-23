@@ -3,8 +3,8 @@ import { planEconomy } from '../domain/economy';
 import { rankServices, settleService, type ServiceState } from '../domain/service';
 import { REPAIR_THRESHOLD, selectRepairTarget } from '../domain/maintenance';
 import { type TrafficState } from '../domain/traffic';
-import { requestMove as travel } from './traffic';
-import { extensionTiles, extractorSite, factorySite, labSite, linkSite, preservesConnectivity, terminalSite } from '../domain/planning';
+import { hasApproach, requestMove as travel } from './traffic';
+import { extensionTiles, extractorSite, factorySite, labSite, linkSite, preservesApproaches, preservesConnectivity, terminalSite } from '../domain/planning';
 import { LAB_INPUT_LACK } from '../domain/labs';
 import { FACTORY_MINERAL_FLOOR } from '../domain/factory';
 import { currentRecipe, labMineral, terminalStock } from './labs';
@@ -65,7 +65,10 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
   const sinks = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension | StructureTower | StructureStorage =>
     (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION || s.structureType === STRUCTURE_TOWER
       || (s.structureType === STRUCTURE_STORAGE && spawnBufferFull))
-    && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
+    && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+    // 几何封印的 sink（8 邻域全是墙/结构）永远送不到货，会反复吸走带能量的工人形成
+    // 冻结循环（线上实证 ext 6aa94c03 封印致工人 250+ tick 死锁）——从派单板剔除。
+    && hasApproach(room, s.pos));
   const spawns = room.find(FIND_MY_SPAWNS);
   const priorService = Memory.controllerService?.[room.name];
   const upgrade = priorService?.worker && Game.time - priorService.lastProgress >= 200 ? { room: room.name, worker: priorService.worker } : undefined;
@@ -273,12 +276,12 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
         sources: sources.map(src => ({ x: src.pos.x, y: src.pos.y })),
         containers: containers.map(c => ({ x: c.pos.x, y: c.pos.y })),
         storage: storageAnchor,
-        links: anchorLinks, capacity: linkCap, free,
+        links: anchorLinks, capacity: linkCap, free, passable,
       });
       if (site) room.createConstructionSite(site.x, site.y, STRUCTURE_LINK);
     } else if (growthType === STRUCTURE_TERMINAL) {
-      const site = terminalSite({ storage: storageAnchor, links: anchorLinks, free });
-      // 与扩展环同规:候选不得割裂 storage 周边(连通性守卫)。
+      const site = terminalSite({ storage: storageAnchor, links: anchorLinks, free, passable });
+      // 与扩展环同规:候选不得割裂 storage 周边(连通性守卫);封印守卫在选择器内部过滤。
       if (site && preservesConnectivity(site, passable)) room.createConstructionSite(site.x, site.y, STRUCTURE_TERMINAL);
     } else if (growthType === STRUCTURE_EXTRACTOR) {
       const site = extractorSite({
@@ -299,7 +302,7 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
           ...room.find(FIND_MY_STRUCTURES).filter((s): s is StructureLab => s.structureType === STRUCTURE_LAB).map(l => ({ x: l.pos.x, y: l.pos.y })),
           ...allSites.filter(s => s.structureType === STRUCTURE_LAB).map(l => ({ x: l.pos.x, y: l.pos.y })),
         ],
-        free,
+        free, passable,
       });
       if (site && preservesConnectivity(site, passable)) room.createConstructionSite(site.x, site.y, STRUCTURE_LAB);
     } else if (growthType === STRUCTURE_FACTORY) {
@@ -312,12 +315,12 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
           ...room.find(FIND_MY_STRUCTURES).filter((s): s is StructureFactory => s.structureType === STRUCTURE_FACTORY).map(f => ({ x: f.pos.x, y: f.pos.y })),
           ...allSites.filter(s => s.structureType === STRUCTURE_FACTORY).map(f => ({ x: f.pos.x, y: f.pos.y })),
         ],
-        free,
+        free, passable,
       });
       if (site && preservesConnectivity(site, passable)) room.createConstructionSite(site.x, site.y, STRUCTURE_FACTORY);
     } else {
     for (const tile of extensionTiles({ x: spawns[0].pos.x, y: spawns[0].pos.y }, free, 8)) {
-      if (!preservesConnectivity(tile, passable)) continue;
+      if (!preservesConnectivity(tile, passable) || !preservesApproaches(tile, passable)) continue;
       if (room.createConstructionSite(tile.x, tile.y, growthType) === OK) break;
     }
     }

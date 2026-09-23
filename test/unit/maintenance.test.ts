@@ -94,6 +94,7 @@ function engineStub(containers: unknown[], sites: unknown[] = []) {
     name: 'W0N1',
     controller: { ticksToDowngrade: 20000, level: 2 },
     createConstructionSite: () => 0,
+    lookAt: () => [],
     find: (kind: number) =>
       kind === 1 ? containers : kind === 2 ? [spawn] : kind === 3 ? [spawn] : sites,
   };

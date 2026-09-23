@@ -11,7 +11,7 @@ import { runMarket } from './market';
 import { driveFactory } from './factory';
 import { driveGuards, driveHealers, runDefense } from './defense';
 import { driveLinks } from './links';
-import { flushTraffic, requestMove } from './traffic';
+import { flushTraffic, hasApproach, requestMove } from './traffic';
 import { driveClaimers, driveColonizers, drivePioneers, driveRemoteMining, driveScouts, intelState, maybeSpawnScout, runEvaluation } from './intel';
 import { driveRaiders } from './expedition';
 
@@ -118,7 +118,8 @@ function work(creep: Creep, room: Room, sources: Source[], state: RuntimeMemory,
   const controller = room.controller;
   const urgent = controller && controller.ticksToDowngrade < 3000;
   const sinks = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension =>
-    (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION) && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
+    (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION) && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+    && hasApproach(room, s.pos));
   const sink = creep.pos.findClosestByRange(sinks);
   const loneWorker = room.find(FIND_MY_CREEPS).filter(c => !c.spawning && c.getActiveBodyparts(WORK) > 0).length <= 1;
   if (sink && room.energyAvailable < target && (!urgent || (room.energyAvailable < reserve && loneWorker))) {

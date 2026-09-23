@@ -47,12 +47,38 @@ function approach(creep: Creep, target: RoomPosition): RoomPosition | undefined 
   return candidates[0]?.pos;
 }
 
+
+/** 8 邻域内是否存在任何【地形+结构】可通行格。creep 占位不算封印（会散），结构/墙永不散。
+ * 用于把几何上永远送不到货的 sink（如被结构环封死的扩展）从派单板剔除。 */
+export function hasApproach(room: Room, pos: RoomPosition): boolean {
+  return STEPS.some(([dx, dy]) => {
+    const x = pos.x + dx, y = pos.y + dy;
+    return x >= 0 && x < 50 && y >= 0 && y < 50 && passable(room, x, y);
+  });
+}
 export function requestMove(creep: Creep, target: RoomPosition, range: number): void {
   prepare();
   if ((creep.memory.traffic?.retryAt ?? 0) > Game.time) return;
   const state = observeTraffic(creep.memory.traffic, creep.pos.x, creep.pos.y, Game.time, `${key(target)}:${range}`, creep.fatigue > 0);
   creep.memory.traffic = state;
-  if (state.retryAt) { delete creep.memory.shipment; return; }
+  if (state.retryAt) {
+    delete creep.memory.shipment;
+    // 退避期间不再发移动意图，若原路停在走廊上会把后来者一起拖进退避（线上实证 spawn 区
+    // 250+ tick 冻结死结）。进退避前先侧移一步到空格，把被卡的路让出来。
+    if (!creep.fatigue) {
+      const aside = STEPS
+        .map(([dx, dy]) => [creep.pos.x + dx, creep.pos.y + dy] as const)
+        .filter(([x, y]) => x >= 0 && x < 50 && y >= 0 && y < 50 && passable(creep.room, x, y))
+        .filter(([x, y]) => !creep.room.lookAt(x, y).some(r => r.type === 'creep' && !!r.creep))
+        .map(([x, y]) => ({ pos: new RoomPosition(x, y, creep.room.name), dist: Math.abs(x - target.x) + Math.abs(y - target.y) }))
+        .sort((a, b) => a.dist - b.dist)[0]?.pos;
+      if (aside) {
+        intents.set(creep.name, { creep, next: aside, priority: 99 });
+        creep.memory.traffic = { ...state, anchorX: state.x, anchorY: state.y };
+      }
+    }
+    return;
+  }
   if (creep.fatigue || creep.pos.inRangeTo(target, range)) return;
   const steps = creep.pos.findPathTo(target, { range, ignoreCreeps: state.stuck < 3, maxRooms: 1 });
   let step: RoomPosition | undefined;

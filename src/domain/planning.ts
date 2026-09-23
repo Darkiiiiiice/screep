@@ -30,6 +30,32 @@ export function extensionTiles(origin: Tile, free: (x: number, y: number) => boo
 }
 
 /**
+ * 放置守卫：在 tile 落一个障碍结构后，其 8 邻域里任何不可通行格（结构/墙/源/矿）
+ * 必须仍保留至少一个可及格（不含 tile 本身）。否则该邻居永远无法被 creep 贴身，
+ * range-1 交互（transfer/repair/harvest）几何不可能——成为封印格（线上实证：
+ * 扩展环闭合把 (23,20) 扩展 8 邻域全封死，派单板反复把它的空位派给工人形成冻结）。
+ * 与 preservesConnectivity 同 Doctrine：拿不准就跳过这次放置。
+ */
+export function preservesApproaches(tile: Tile, passable: (x: number, y: number) => boolean): boolean {
+  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+    if (!dx && !dy) continue;
+    const nx = tile.x + dx, ny = tile.y + dy;
+    if (nx < 0 || nx > 49 || ny < 0 || ny > 49) continue;
+    if (passable(nx, ny)) continue;
+    let open = false;
+    for (let ax = -1; ax <= 1 && !open; ax++) for (let ay = -1; ay <= 1 && !open; ay++) {
+      if (!ax && !ay) continue;
+      const cx = nx + ax, cy = ny + ay;
+      if (cx === tile.x && cy === tile.y) continue;
+      if (cx < 0 || cx > 49 || cy < 0 || cy > 49) continue;
+      if (passable(cx, cy)) open = true;
+    }
+    if (!open) return false;
+  }
+  return true;
+}
+
+/**
  * False when blocking `tile` would strand part of the room: an extension site is
  * an obstacle from the moment it is placed (engine treats solid sites as blocking),
  * so a tile whose passable neighbours cannot all reach each other without crossing
@@ -108,6 +134,8 @@ export function linkSite(args: {
   links: readonly Tile[];
   capacity: number;
   free: (x: number, y: number) => boolean;
+  /** 提供则跳过会封印邻居可及格的候选（防 sealed sink）。 */
+  passable?: (x: number, y: number) => boolean;
 }): Tile | undefined {
   const chebyshev = (a: Tile, b: Tile) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
   if (args.links.length >= args.capacity) return undefined;
@@ -122,6 +150,7 @@ export function linkSite(args: {
         // 源地块不在 LOOK_STRUCTURES 里,free() 看不见——显式排除,
         // 否则 link 会盖住矿头(mockup 放行、真引擎拒,且堵死采矿)。
         if (args.sources.some(s => s.x === x && s.y === y)) continue;
+        if (args.passable && !preservesApproaches(tile, args.passable)) continue;
         if (args.links.some(l => chebyshev(l, tile) <= 1)) continue;
         candidates.push(tile);
       }
@@ -166,6 +195,8 @@ export function terminalSite(args: {
   storage?: Tile | undefined;
   links: readonly Tile[];
   free: (x: number, y: number) => boolean;
+  /** 提供则跳过会封印邻居可及格的候选（防 sealed sink）。 */
+  passable?: (x: number, y: number) => boolean;
 }): Tile | undefined {
   if (!args.storage) return undefined;
   const chebyshev = (a: Tile, b: Tile) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
@@ -176,6 +207,7 @@ export function terminalSite(args: {
       const tile = { x, y };
       if (chebyshev(tile, args.storage) === 0) continue;
       if (args.links.some(l => chebyshev(l, tile) <= 1)) continue;
+      if (args.passable && !preservesApproaches(tile, args.passable)) continue;
       candidates.push(tile);
     }
   }
@@ -206,6 +238,8 @@ export function factorySite(args: {
   anchor?: Tile | undefined;
   factories: readonly Tile[];
   free: (x: number, y: number) => boolean;
+  /** 提供则跳过会封印邻居可及格的候选（防 sealed sink）。 */
+  passable?: (x: number, y: number) => boolean;
 }): Tile | undefined {
   if (!args.anchor) return undefined;
   const chebyshev = (a: Tile, b: Tile) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
@@ -217,6 +251,7 @@ export function factorySite(args: {
       // 锚点格被 terminal 占用;即便 free 通过(纯函数不假设)也不许叠建。
       if (chebyshev(tile, args.anchor) === 0) continue;
       if (args.factories.some(f => chebyshev(f, tile) === 0)) continue;
+      if (args.passable && !preservesApproaches(tile, args.passable)) continue;
       candidates.push(tile);
     }
   }
@@ -234,6 +269,8 @@ export function labSite(args: {
   anchor?: Tile | undefined;
   labs: readonly Tile[];
   free: (x: number, y: number) => boolean;
+  /** 提供则跳过会封印邻居可及格的候选（防 sealed sink）。 */
+  passable?: (x: number, y: number) => boolean;
 }): Tile | undefined {
   if (!args.anchor) return undefined;
   const chebyshev = (a: Tile, b: Tile) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
@@ -245,6 +282,7 @@ export function labSite(args: {
       // 锚点格被 terminal 占用;即便 free 通过(纯函数不假设)也不许叠建。
       if (chebyshev(tile, args.anchor) === 0) continue;
       if (args.labs.some(l => chebyshev(l, tile) > 2)) continue;
+      if (args.passable && !preservesApproaches(tile, args.passable)) continue;
       candidates.push(tile);
     }
   }
