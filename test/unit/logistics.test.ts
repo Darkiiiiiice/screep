@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LogisticsBoard, STORAGE_RESERVE_FLOOR, refuelTargets } from '../../src/domain/logistics';
+import { upgradeDutyQuota, LogisticsBoard, STORAGE_RESERVE_FLOOR, refuelTargets } from '../../src/domain/logistics';
 import { runLogistics } from '../../src/game/logistics';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -221,4 +221,21 @@ it('lease-held progress refreshes the clock and releases without reappointing in
   // The old `handled.size === 0` assertion pinned the pre-surplus-duty idle
   // room; carrying workers now legitimately work (surplus upgrade) while the
   // released lease stays un-reappointed, which is the contract above.
+});
+
+describe('upgrade duty quota (M7-4)', () => {
+  const base = { sites: 0, ticksToDowngrade: 20000, energyAvailable: 800, idleWorkers: 9 };
+  it('posts a fixed duty shift when the room is quiet and rich', () => {
+    expect(upgradeDutyQuota(base)).toBe(3);
+  });
+  it('stands down for construction, downgrade emergencies, and spawn starvation', () => {
+    expect(upgradeDutyQuota({ ...base, sites: 1 })).toBe(0);
+    expect(upgradeDutyQuota({ ...base, ticksToDowngrade: 2999 })).toBe(0);
+    expect(upgradeDutyQuota({ ...base, energyAvailable: 299 })).toBe(0);
+  });
+  it('never strips the last two runners', () => {
+    expect(upgradeDutyQuota({ ...base, idleWorkers: 5 })).toBe(3);
+    expect(upgradeDutyQuota({ ...base, idleWorkers: 3 })).toBe(1);
+    expect(upgradeDutyQuota({ ...base, idleWorkers: 2 })).toBe(0);
+  });
 });

@@ -1,4 +1,4 @@
-import { LogisticsBoard, refuelTargets } from '../domain/logistics';
+import { LogisticsBoard, refuelTargets, upgradeDutyQuota } from '../domain/logistics';
 import { planEconomy } from '../domain/economy';
 import { rankServices, settleService, type ServiceState } from '../domain/service';
 import { REPAIR_THRESHOLD, selectRepairTarget } from '../domain/maintenance';
@@ -534,6 +534,27 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
         const source = site.pos.findClosestByRange(sources.filter(s => s.energy > 0));
         if (source && builder.harvest(source) === ERR_NOT_IN_RANGE) travel(builder, source.pos, 1);
       }
+    }
+  }
+  // 升级值勤(M7-4):在 shipment 派单前切出固定一班专跑控制器——否则
+  // spawn/ext 的 1300 缓冲把全部劳力吸在填充腿上,升级只剩零头(线上实测
+  // 0.36-0.5/tick,RCL/GCL 双闸门被拖成数十天)。名字序排班防抖动。
+  const dutyQuota = controller ? upgradeDutyQuota({
+    sites: allSites.length, ticksToDowngrade: controller.ticksToDowngrade ?? Infinity,
+    energyAvailable: room.energyAvailable, idleWorkers: eligible.filter(c => !handled.has(c.name)).length,
+  }) : 0;
+  if (dutyQuota > 0 && controller) {
+    const duty = eligible.filter(c => !handled.has(c.name)).sort((a, b) => a.name.localeCompare(b.name)).slice(0, dutyQuota);
+    for (const creep of duty) {
+      delete creep.memory.shipment;
+      if (creep.store.energy > 0) {
+        if (creep.upgradeController(controller) === ERR_NOT_IN_RANGE) travel(creep, controller.pos, 3);
+      } else {
+        const stock = creep.pos.findClosestByRange(fuelStockpiles.filter(c => c.store.getUsedCapacity(RESOURCE_ENERGY) > 0));
+        if (!stock) continue;
+        if (creep.withdraw(stock, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) travel(creep, stock.pos, 1);
+      }
+      handled.add(creep.name);
     }
   }
   // Reserve delivery capacity for cargo already on the road before issuing new pickups.

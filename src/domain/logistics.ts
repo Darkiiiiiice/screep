@@ -9,6 +9,27 @@ export interface Shipment { worker: string; from: string; to: string; amount: nu
  */
 export const STORAGE_RESERVE_FLOOR = 1000;
 
+/** 升级值勤单班上限:3 条腿专跑控制器,其余照常伺候真实 sink。 */
+export const UPGRADE_DUTY_QUOTA = 3;
+/** 值勤能量红线:spawn 存量低于此即全员回归 sink(补员优先,§3.1)。 */
+export const UPGRADE_DUTY_MIN_ENERGY = 300;
+/** 值勤保底搬运腿:真实 sink 永远留足两条线。 */
+export const UPGRADE_DUTY_MIN_RUNNERS = 2;
+
+/**
+ * 升级值勤配额(纯):控制器是经济的尾闾——无工地、无降级紧急、spawn 存量
+ * 安全时,从闲置劳力里固定切出一班专跑升级(名字序确定性排班防抖动);
+ * 工地在期/存量告急/劳力不足时配额归零,搬运腿全量回归真实 sink。
+ * 收益模型:50 货架 20 格通勤的利用率 ~20%,定班 ~90%,同编制 4-5 倍
+ * 升级吞吐(线上实证:全员被 spawn/ext 1300 缓冲吸干,升级只剩 0.5/tick)。
+ */
+export function upgradeDutyQuota(args: { sites: number; ticksToDowngrade: number; energyAvailable: number; idleWorkers: number }): number {
+  if (args.sites > 0) return 0;
+  if (args.ticksToDowngrade < 3000) return 0;
+  if (args.energyAvailable < UPGRADE_DUTY_MIN_ENERGY) return 0;
+  return Math.max(0, Math.min(UPGRADE_DUTY_QUOTA, args.idleWorkers - UPGRADE_DUTY_MIN_RUNNERS));
+}
+
 export interface FuelStockpile { id: string; energy: number; storage?: boolean }
 
 /** 产业取能视角的库存表:storage 低于保底线时被过滤,其余全量透传。 */

@@ -109,6 +109,7 @@ const workerStub = (name: string, energy: number) => ({
   store: { energy, getUsedCapacity: () => energy, getFreeCapacity: () => 50 - energy },
   pos: new Position(16, 16), getActiveBodyparts: () => 1,
   repair: vi.fn(() => 0), withdraw: vi.fn(() => 0), harvest: vi.fn(() => 0), transfer: vi.fn(() => 0),
+  upgradeController: vi.fn(() => 0),
 });
 
 describe('repair assignment in logistics', () => {
