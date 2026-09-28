@@ -57,7 +57,7 @@ export interface IntelMemory {
  raiderActive?: string;
  lastRaiderDeathAt?: number;
  raiding?: { tick: number; targets: { name: string; distance: number; effectiveTicks: number }[] };
- /** 突袭小队台账(M7-4):阶段机输入,单小队在飞。attackers/healers 为在册名单。 */
+ /** 突袭小队台账(M7-6):阶段机输入,单小队在飞。attackers/healers 为在册名单。 */
  assault?: {
    target: string;
    phase: 'muster' | 'travel' | 'engage' | 'withdraw';
@@ -74,7 +74,7 @@ export interface IntelMemory {
  /** 最近一次出击解散的 tick 与目标(再出击冷却,§失败有界)。 */
  lastAssaultEndAt?: number;
  lastAssaultTarget?: string;
- /** 突袭目标榜快照(M7-4,评估周期产出;空榜 = 情报范围内无武装占房)。 */
+ /** 突袭目标榜快照(M7-6,评估周期产出;空榜 = 情报范围内无武装占房)。 */
  assaulting?: { tick: number; targets: { name: string; distance: number; armed: number }[] };
  colonies?: Record<string, { claimedAt: number; spawnedAt?: number; lastPioneerWipeAt?: number; lastSquadCount?: number }>;
  /** 评估根房间:距离缓存全是根相对的,首评锚定,根房失守才重锚并清缓存

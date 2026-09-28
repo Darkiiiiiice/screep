@@ -310,7 +310,7 @@ export function runBootstrap(): void {
                           });
                           if (raidTarget) idle.spawnCreep([CLAIM, MOVE], `raider-${room.name}-${Game.time}`, { memory: { role: 'raider', raidTarget } });
                           else if (Memory.assaultEnabled === true) {
-                            // 突袭小队:第九顺位盈余(M7-4,Memory.assaultEnabled 把门)。
+                            // 突袭小队:第九顺位盈余(M7-6,Memory.assaultEnabled 把门)。
                             // 武装外人蹲守有价值房时编小队清场——战争是最后盈余,
                             // 工人地板/冷却/编成缺口全在 assaultSpawnNeed 内。
                             const assIntel = intelState();

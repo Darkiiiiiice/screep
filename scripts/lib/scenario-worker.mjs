@@ -428,7 +428,7 @@ try {
     }));
   }
   if (assaultProbe) {
-    // M7-4 突袭小队:W0N2 被武装外人蹲守(无塔/无主/有源),RCL4 暖启动母房。
+    // M7-6 突袭小队:W0N2 被武装外人蹲守(无塔/无主/有源),RCL4 暖启动母房。
     // 编成 3 攻击手+2 医疗;母房只把门不对抗(守家夹具不叠加,威胁全在邻房)。
     await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 4, progress: 0 } });
     for (const [x, y] of [[20, 25], [30, 25], [25, 19], [19, 25], [31, 25], [20, 20], [28, 28], [21, 27], [27, 20], [29, 24]]) {
@@ -443,6 +443,12 @@ try {
     }
     await server.world.addRoom('W0N2');
     await server.world.setTerrain('W0N2', new TerrainMatrix());
+    // 邻环全量落位(raid/claim 夹具判例):mock 原生寻路对无地形条目的邻房
+    // 直接抛 Could not load terrain data——行军/撤退路径缓冲触邻即炸。
+    for (const name of ['W1N1', 'W1N0', 'W1N2', 'W0N0', 'E0N1', 'E0N0', 'E0N2']) {
+      await server.world.addRoom(name);
+      await server.world.setTerrain(name, new TerrainMatrix());
+    }
     await server.world.addRoomObject('W0N2', 'controller', 25, 40, { user: null, level: 0 });
     for (const [x, y] of fixture.sources) {
       await server.world.addRoomObject('W0N2', 'source', x, y, { energy: 3000, energyCapacity: 3000, nextRegenerationTime: 301 });
@@ -458,7 +464,7 @@ try {
         distances: { W0N2: 1 },
       },
     }));
-    report.assault = { target: 'W0N2', squatters: ['Squatter-1', 'Squatter-2'], minHits: 2000 };
+    report.assault = { target: 'W0N2', squatters: ['Squatter-1', 'Squatter-2'], minHits: 2000, clearedAt: null, phases: {} };
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -691,7 +697,8 @@ try {
       }
       if (i === 600) console.log('[squad] soft raider campaign starts (5000 hp, 20 dps)');
     }
-    if (assaultProbe && i <= 2100 && i % 25 === 0) {
+    // 首次受击即停补投:持续再武装会造第二/三轮任务,终帧状态不可判。
+    if (assaultProbe && i <= 2100 && report.assault.minHits >= 2000 && i % 25 === 0) {
       // 无 AI 的注入敌会 ~100 tick 自灭(M7-1 同象):持续补投保证威胁窗口
       // 覆盖小队孵化+行军期;歼敌判定认"终帧不在场+完成台账落地"。
       const objs = await server.world.roomObjects('W0N2');
@@ -711,6 +718,15 @@ try {
     if (assaultProbe && i % 5 === 0) {
       const sq = (await server.world.roomObjects('W0N2')).filter(o => o.type === 'creep' && report.assault.squatters.includes(o.name));
       if (sq.length > 0) report.assault.minHits = Math.min(report.assault.minHits, ...sq.map(o => o.hits ?? 2000));
+      else if (report.assault.minHits < 2000) report.assault.clearedAt ??= i;
+      // 相位 5-tick 直采:补投停止后战斗变快,engage 相位窗(~80t)短于
+      // report.ticks 的 ~100t 采样间隔,快照序列会整体错过。
+      try {
+        const env = server.common.storage.env;
+        const raw = await env.get(env.keys.MEMORY + bot.id);
+        const ph = (JSON.parse(raw || '{}').intel ?? {}).assault?.phase;
+        if (ph) report.assault.phases[ph] = i;
+      } catch { /* 采样失败不影响世界 */ }
     }
     if (combatProbe && i === 850 && !squadProbe) {
       for (const [name, x] of [['Raider-2', 33], ['Raider-3', 35]]) {
@@ -1260,12 +1276,12 @@ try {
       // 榜单锁敌:突袭目标榜曾收录 W0N2
       const boardHit = memSeries.some(m => ((m.assaulting?.targets) ?? []).some(x => x.name === 'W0N2'));
       check('assault board locked the armed squatter', boardHit);
-      // 阶段推进:曾抵达交战阶段
-      check('squad reached the engage phase', memSeries.some(m => m.assault?.phase === 'engage'));
-      // 歼敌:两只蹲守者终帧不在场
-      const lastObjs = [...report.ticks].reverse().find(t => t.objects.some(o => o.type === 'creep'))?.objects ?? [];
-      const squatterGone = report.assault.squatters.every(n => !lastObjs.some(o => o.type === 'creep' && o.name === n));
-      check('squatters cleared from the target room', squatterGone);
+      // 阶段推进:曾抵达交战阶段(5-tick 直采,快照序列会漏短相位窗)
+      check('squad reached the engage phase', report.assault.phases.engage !== undefined);
+      // 歼敌:受击后清场且保持到窗口后段(证据取自 W0N2 直采采样;母房
+      // objects 不含邻房,按它断"清场"恒真——空断言已废)。
+      check('squatters cleared from the target room after damage',
+        report.assault.clearedAt !== null && report.assault.clearedAt < tickCount - 50);
       // 真打过的取证:蹲守者曾掉血(排除"消失窗口假完成"路径)
       check('squatters took real damage from the squad', report.assault.minHits < 2000);
       // 完成:台账落地(assault 收档,冷却与目标记录在案)

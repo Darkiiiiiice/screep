@@ -1,5 +1,5 @@
 /**
- * M7-4 突袭小队(纯决策层):§3.8 "自动产生候选目标,按收益/威胁/距离/
+ * M7-6 突袭小队(纯决策层):§3.8 "自动产生候选目标,按收益/威胁/距离/
  * 敌方防御评分" + "先实现单兵与简单小队"。与 expedition.ts(拆预留,
  * 和平房)互补:本层处理【武装占房】——有价值房被武装外人蹲着,守家
  * 单兵够不着,唯一经济动作是编小队跨房清场。全部读数以普通对象传入,
@@ -42,14 +42,17 @@ export interface AssaultCandidate {
 
 /**
  * 突袭目标榜(纯):有武装蹲守的无主有价值房——威胁在场(与守家同口径,
- * 无武装过路者不算)、无塔、情报新鲜、有源、距离达标。按武装数升序
- * (软柿子先打),同分名字字典序确定性。
+ * 无武装过路者不算)、无塔、情报新鲜、有源、距离达标、可战胜(armed 留出
+ * +1 编成余量)。按武装数升序(软柿子先打),同分名字字典序确定性。
  */
 export function evaluateAssaultTargets(args: { rooms: Record<string, RoomIntel>; distances: Record<string, number>; now: number }): AssaultCandidate[] {
   const candidates: AssaultCandidate[] = [];
   for (const [name, intel] of Object.entries(args.rooms)) {
     if (isStale(intel, args.now)) continue;
     if (intel.threat.armed <= 0) continue;
+    // 可战胜闸:编成攻击手 = armed+1 封顶,armed 达上限即无局部优势,
+    // 打不动只会烧成"折损撤退+冷却+再立队"死循环(§3.8 遇无法破防不持续送兵)。
+    if (intel.threat.armed >= ASSAULT_MAX_ATTACKERS) continue;
     if (intel.threat.towers > 0) continue;
     if (intel.controller?.owner !== undefined) continue;
     if (intel.sources.length === 0) continue;
@@ -115,7 +118,9 @@ export function advanceAssault(state: AssaultState, obs: AssaultObservation): As
   // "折半/折损"是战场状态,不是集合状态(§不让整队无限等待——集合期
   // 的超时由 .game 层集结时限另行把门)。
   if (state.phase !== 'muster') {
-    if (state.losses >= ASSAULT_LOSS_BUDGET && squadFielded > 0) {
+    // 全灭也必须产出终态:roster 清空 + 折损入账 → 撤退(接线层即收台账落
+    // 冷却)——否则"单小队在飞"闸永久卡死,再立队永不发生。
+    if (state.losses >= ASSAULT_LOSS_BUDGET) {
       return { phase: 'withdraw', complete: false, withdrawReason: 'losses' };
     }
     if (attackersAlive < Math.ceil(state.plan.attackers / 2) && squadFielded > 0) {

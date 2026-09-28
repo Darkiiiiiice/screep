@@ -5,14 +5,14 @@ import { intelState, observeRoom } from './intel';
 
 declare global {
   interface CreepMemory {
-    /** 突袭小队目标房名(M7-4)。 */
+    /** 突袭小队目标房名(M7-6)。 */
     assaultTarget?: string;
   }
   interface Memory { assaultEnabled?: boolean }
 }
 
 /**
- * 突袭小队驱动(M7-4):阶段机推进 + 成员意图执行。
+ * 突袭小队驱动(M7-6):阶段机推进 + 成员意图执行。
  * 台账(intel.assault)是唯一真相:孵化登记(bootstrap)、折损同步、
  * 阶段转换、解散冷却都在此收敛。成员动作与守家守卫/拆预留攻击手同式:
  * 就近扑咬/贴身治疗/寻路抛错按不可达记账。
@@ -93,14 +93,22 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
     }
     const target = mem.assaultTarget;
     if (!target) continue;
-    if (creep.room.name !== target) {
-      if (phase === 'muster') {
-        // 集结:母房朝目标一侧的出口格等齐(§出口两侧集结)。
-        if (!mem.home) { dropFromRoster(intel, creep.name); creep.suicide(); continue; }
-        const tile = exitTileOf(mem.home, target);
+    if (phase === 'muster') {
+      // 集结:无论身在何房(含被推挤过界者)一律朝母房侧集结格走齐——
+      // 集结期身处目标房不是"到位",是脱离编队的孤身送死(取证:医疗被
+      // 挤过边界后原地挨打到死)。寻路抛错按不可达退役。
+      if (!mem.home) { dropFromRoster(intel, creep.name); creep.suicide(); continue; }
+      const tile = exitTileOf(mem.home, target);
+      try {
         if (!creep.pos.isNearTo(tile)) creep.moveTo(tile, { reusePath: 10 });
-        continue;
+      } catch {
+        markUnreachable(intel, creep.room.name, Game.time);
+        dropFromRoster(intel, creep.name);
+        creep.suicide();
       }
+      continue;
+    }
+    if (creep.room.name !== target) {
       try {
         creep.moveTo(new RoomPosition(25, 25, target), { range: 22, reusePath: 20 });
       } catch {

@@ -11,7 +11,7 @@ const room = (over: Partial<RoomIntel> = {}): RoomIntel => ({
   ...over,
 });
 
-describe('assault target evaluation (M7-4)', () => {
+describe('assault target evaluation (M7-6)', () => {
   it('keeps only armed squatted valuable rooms within reach', () => {
     const rooms = {
       // 合格:武装蹲守无主有源近房
@@ -34,6 +34,15 @@ describe('assault target evaluation (M7-4)', () => {
     expect(targets.map((t) => t.name)).toEqual(['W0N1']);
   });
 
+  it('drops unwinnable rooms: armed at the cap never boards (+1 superiority preserved)', () => {
+    const rooms = {
+      W0N1: room({ threat: { hostiles: 2, armed: 4, towers: 0, keeperLairs: 0 } }),
+      W0N2: room({ threat: { hostiles: 1, armed: 3, towers: 0, keeperLairs: 0 } }),
+    };
+    const targets = evaluateAssaultTargets({ rooms, distances: { W0N1: 1, W0N2: 1 }, now: 1200 });
+    expect(targets.map((x) => x.name)).toEqual(['W0N2']);
+  });
+
   it('sorts softest target first, then by name', () => {
     const rooms = { W0N2: room({ threat: { hostiles: 1, armed: 3, towers: 0, keeperLairs: 0 } }), W0N1: room() };
     const targets = evaluateAssaultTargets({ rooms, distances: { W0N1: 1, W0N2: 1 }, now: 1200 });
@@ -42,15 +51,16 @@ describe('assault target evaluation (M7-4)', () => {
   });
 });
 
-describe('assault squad composition (M7-4)', () => {
+describe('assault squad composition (M7-6)', () => {
   it('fields local superiority and caps the budget', () => {
     expect(planAssaultSquad(0)).toEqual({ attackers: 2, healers: 1 });
     expect(planAssaultSquad(2)).toEqual({ attackers: 3, healers: 2 });
     expect(planAssaultSquad(9)).toEqual({ attackers: 4, healers: 2 });
+    expect(planAssaultSquad(3)).toEqual({ attackers: 4, healers: 2 });
   });
 });
 
-describe('assault phase machine (M7-4)', () => {
+describe('assault phase machine (M7-6)', () => {
   const state = (over: Partial<AssaultState> = {}): AssaultState => ({
     phase: 'muster',
     target: 'W0N1',
@@ -79,6 +89,11 @@ describe('assault phase machine (M7-4)', () => {
     expect(losses).toMatchObject({ phase: 'withdraw', withdrawReason: 'losses' });
     const crippled = advanceAssault(state({ phase: 'engage', losses: 0, attackers: ['a1'], healers: ['h1', 'h2'] }), { threatCleared: false, squadInRoom: true });
     expect(crippled).toMatchObject({ phase: 'withdraw', withdrawReason: 'crippled' });
+  });
+
+  it('reaches a terminal verdict on total extinction (no in-flight deadlock)', () => {
+    const extinct = advanceAssault(state({ phase: 'engage', losses: 5, attackers: [], healers: [] }), { threatCleared: false, squadInRoom: true });
+    expect(extinct).toMatchObject({ phase: 'withdraw', withdrawReason: 'losses' });
   });
 
   it('prefers completion over withdrawal once the room is cleared', () => {
