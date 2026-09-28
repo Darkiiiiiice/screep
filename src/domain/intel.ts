@@ -311,9 +311,11 @@ export function claimerSpawnNeed(args: {
   if (controller?.reserver === args.me && effectiveTicks >= CLAIMER_RESERVE_REFRESH) return null;
   // 外援预定自守:评估榜有刷新间隔,榜单滞后期间门禁必须自己拒(线上实证
   // 2026-09-28:W36S2 被 darkiiiiiice 预定后评估未刷新,claimer 650/具按
-  // 冷却节奏连续自烬)。余量同口径按情报年龄折算,衰减归零即解锁(与
-  // evaluateColonizeTargets 同一折算)。
-  if (controller?.reserver !== undefined && controller.reserver !== args.me && effectiveTicks > 0) return null;
+  // 冷却节奏连续自烬)。**无衰减逃生口**:外援 CLAIM 件 600 tick 必续约,
+  // "等余量衰减归零"只是把孵化改期到撞上续约后的墙(同日实证:衰减口
+  // 放行一具,到场即 suicide)。复工路径走评估榜再准入(预定者消失后
+  // 榜单重新收录),不走孵化门。
+  if (controller?.reserver !== undefined && controller.reserver !== args.me) return null;
   return target;
 }
 

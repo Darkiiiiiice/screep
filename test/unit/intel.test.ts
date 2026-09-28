@@ -287,15 +287,19 @@ it('spawns a claimer only on full surplus against the top evaluated target needi
   expect(claimerSpawnNeed({ ...base, intel: staleRead })).toBe('W0N2');
   expect(claimerSpawnNeed({ ...base, intel: reserved })).toBe('W0N2');
   // 外援预定自守(线上实证 2026-09-28:评估榜滞后期间 W36S2 被 darkiiiiiice
-  // 预定,claimer 650/具按冷却节奏连续自烬):榜单目标被外人有效预定即拒;
-  // 余量按情报年龄折算,衰减归零(预定已失效)即解锁放行。
+  // 预定,claimer 650/具按冷却节奏连续自烬;衰减口放行一具到场即 suicide):
+  // 榜单目标被外人预定即无条件拒,不看余量余龄——外援 CLAIM 件 600 tick
+  // 必续约,复工走评估榜再准入,不走孵化门。
   const foreign = intel();
   foreign.rooms.W0N2!.controller = { level: 0, reserver: 'rival', reservationTicks: 2053 };
   expect(claimerSpawnNeed({ ...base, intel: foreign })).toBeNull();
-  const foreignLapsed = intel();
-  foreignLapsed.rooms.W0N2!.observedAt = 200;
-  foreignLapsed.rooms.W0N2!.controller = { level: 0, reserver: 'rival', reservationTicks: 900 };
-  expect(claimerSpawnNeed({ ...base, intel: foreignLapsed })).toBe('W0N2');
+  const foreignNearLapse = intel();
+  foreignNearLapse.rooms.W0N2!.controller = { level: 0, reserver: 'rival', reservationTicks: 900 };
+  expect(claimerSpawnNeed({ ...base, intel: foreignNearLapse })).toBeNull();
+  const foreignStaleRead = intel();
+  foreignStaleRead.rooms.W0N2!.observedAt = 200;
+  foreignStaleRead.rooms.W0N2!.controller = { level: 0, reserver: 'rival', reservationTicks: 900 };
+  expect(claimerSpawnNeed({ ...base, intel: foreignStaleRead })).toBeNull();
 });
 
 it('spawns a remote miner only against a self-reserved fresh top target on full surplus', () => {
