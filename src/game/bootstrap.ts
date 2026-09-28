@@ -5,6 +5,8 @@ import { guardSpawnNeed } from '../domain/combat';
 import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { attackerSpawnNeed, evaluateRaidTargets } from '../domain/expedition';
+import { assaultSpawnNeed, planAssaultSquad } from '../domain/raid';
+import { driveAssault } from './raid';
 import { runLogistics, runMinerals, runMiners } from './logistics';
 import { driveLabs } from './labs';
 import { runMarket } from './market';
@@ -307,6 +309,35 @@ export function runBootstrap(): void {
                             lastDeathAt: intelState().lastRaiderDeathAt, now: Game.time,
                           });
                           if (raidTarget) idle.spawnCreep([CLAIM, MOVE], `raider-${room.name}-${Game.time}`, { memory: { role: 'raider', raidTarget } });
+                          else if (Memory.assaultEnabled === true) {
+                            // 突袭小队:第九顺位盈余(M7-4,Memory.assaultEnabled 把门)。
+                            // 武装外人蹲守有价值房时编小队清场——战争是最后盈余,
+                            // 工人地板/冷却/编成缺口全在 assaultSpawnNeed 内。
+                            const assIntel = intelState();
+                            const need = assaultSpawnNeed({
+                              intel: assIntel,
+                              aliveAttackers: Object.values(Game.creeps).filter(c => c.memory.role === 'assaulter').length,
+                              aliveHealers: Object.values(Game.creeps).filter(c => c.memory.role === 'medic').length,
+                              workers: creeps.length, capacity: room.energyCapacityAvailable, energyAvailable: room.energyAvailable, now: Game.time,
+                            });
+                            if (need) {
+                              const name = `${need.role}-${room.name}-${Game.time}`;
+                              const rc = idle.spawnCreep(need.role === 'assaulter' ? [ATTACK, ATTACK, ATTACK, MOVE, MOVE, MOVE] : [HEAL, HEAL, MOVE, MOVE],
+                                name, { memory: { role: need.role, assaultTarget: need.target, home: room.name } });
+                              // 只在入列成功时登记(spawn 忙时 ERR_BUSY 会造幽灵名册);
+                              // 每次成功入列重置集结时限(超时锚=最近增长,非立队时刻)。
+                              if (rc === OK) {
+                                if (assIntel.assault) {
+                                  (need.role === 'assaulter' ? assIntel.assault.attackers : assIntel.assault.healers).push(name);
+                                  assIntel.assault.startedAt = Game.time;
+                                } else {
+                                  const armed = assIntel.rooms[need.target]?.threat.armed ?? 0;
+                                  assIntel.assault = { target: need.target, phase: 'muster', plan: need.plan ?? planAssaultSquad(armed),
+                                    attackers: need.role === 'assaulter' ? [name] : [], healers: need.role === 'medic' ? [name] : [], losses: 0, startedAt: Game.time };
+                                }
+                              }
+                            }
+                          }
                         }
                       }
                     }
@@ -343,6 +374,7 @@ export function runBootstrap(): void {
   isolate(state, 'claim', () => driveClaimers(policy.policy.allies, executionLimit));
   isolate(state, 'colonize', () => driveColonizers(policy.policy.allies, executionLimit));
   isolate(state, 'raid', () => driveRaiders(policy.policy.allies, executionLimit));
+  isolate(state, 'assault', () => driveAssault(policy.policy.allies, executionLimit));
   isolate(state, 'pioneer', () => drivePioneers(policy.policy.allies, executionLimit));
   isolate(state, 'remote', () => driveRemoteMining(executionLimit));
   state.rooms = { ...state.rooms, ...activeRooms };

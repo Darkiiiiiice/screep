@@ -1,0 +1,182 @@
+/**
+ * M7-4 突袭小队(纯决策层):§3.8 "自动产生候选目标,按收益/威胁/距离/
+ * 敌方防御评分" + "先实现单兵与简单小队"。与 expedition.ts(拆预留,
+ * 和平房)互补:本层处理【武装占房】——有价值房被武装外人蹲着,守家
+ * 单兵够不着,唯一经济动作是编小队跨房清场。全部读数以普通对象传入,
+ * 禁止引擎全局。
+ *
+ * v1 边界(§先简后繁):目标无塔(破塔是独立作战能力)、无房主(有主房
+ * 是战争级,不做)、单小队在飞、清场即完成撤回解散。
+ */
+
+import { isStale } from './intel';
+import type { IntelMemory, RoomIntel } from './intel';
+
+/** 突袭兵身体 [ATTACK×3, MOVE×3] = 390:3 MOVE 平原全速不掉队,90 dps。 */
+export const ASSAULTER_BODY_COST = 390;
+/** 医疗兵身体沿用守家配方 [HEAL×2, MOVE×2] = 700(combat.ts HEALER_COST)。 */
+export const SUPPORT_BODY_COST = 700;
+/** 突袭是满员工人口粮之上的盈余支出:地板同其他盈余岗。 */
+export const ASSAULT_WORKER_FLOOR = 4;
+/** 过远的武装房不打:行军暴露与补给损耗失去经济意义。 */
+export const ASSAULT_MAX_DISTANCE = 2;
+/** 单小队攻击手上限(预算封顶,超编是烧钱)。 */
+export const ASSAULT_MAX_ATTACKERS = 4;
+/** 一次出击最多折损成员数:超过即误判了优势,撤退(§失败有界)。 */
+export const ASSAULT_LOSS_BUDGET = 1;
+/** 出击结束(完成或撤退)后的再出击冷却:防对打不动的房反复送兵。 */
+export const ASSAULT_COOLDOWN = 500;
+/** 集结时限:自最近一次 roster 增长起算(串行孵化+能量回填节奏 ~300/具),
+ * 超时未齐即撤退(§不让整队无限等待已死亡成员);死亡成员由折损判据处理。 */
+export const ASSAULT_MUSTER_TIMEOUT = 600;
+/** 清场保持时长:armed==0 需连续保持这么久才算完成(敌人短暂消失/撤退
+ * 不算胜利,§战后侦察确认成果)。 */
+export const ASSAULT_CLEAR_HOLD = 25;
+
+export interface AssaultCandidate {
+  name: string;
+  distance: number;
+  /** 观测到的武装部件总数(敌方防御规模)。 */
+  armed: number;
+}
+
+/**
+ * 突袭目标榜(纯):有武装蹲守的无主有价值房——威胁在场(与守家同口径,
+ * 无武装过路者不算)、无塔、情报新鲜、有源、距离达标。按武装数升序
+ * (软柿子先打),同分名字字典序确定性。
+ */
+export function evaluateAssaultTargets(args: { rooms: Record<string, RoomIntel>; distances: Record<string, number>; now: number }): AssaultCandidate[] {
+  const candidates: AssaultCandidate[] = [];
+  for (const [name, intel] of Object.entries(args.rooms)) {
+    if (isStale(intel, args.now)) continue;
+    if (intel.threat.armed <= 0) continue;
+    if (intel.threat.towers > 0) continue;
+    if (intel.controller?.owner !== undefined) continue;
+    if (intel.sources.length === 0) continue;
+    const distance = args.distances[name];
+    if (distance === undefined || distance > ASSAULT_MAX_DISTANCE) continue;
+    candidates.push({ name, distance, armed: intel.threat.armed });
+  }
+  return candidates.sort((a, b) => a.armed - b.armed || a.name.localeCompare(b.name));
+}
+
+export interface AssaultSquadPlan {
+  attackers: number;
+  healers: number;
+}
+
+/**
+ * 小队编成(纯):局部优势原则——攻击手 = 武装数 + 1(封顶 4),
+ * 医疗 = ceil(攻击手/2)(守家 1:1 是单兵场景; away 小队 2:1 够用)。
+ */
+export function planAssaultSquad(armed: number): AssaultSquadPlan {
+  const attackers = Math.min(Math.max(1, armed) + 1, ASSAULT_MAX_ATTACKERS);
+  return { attackers, healers: Math.ceil(attackers / 2) };
+}
+
+/** 突袭阶段:集结(母房出口)→ 行军(跨房)→ 交战 → 撤退/完成。 */
+export type AssaultPhase = 'muster' | 'travel' | 'engage' | 'withdraw' | 'done';
+
+export interface AssaultState {
+  phase: AssaultPhase;
+  target: string;
+  plan: AssaultSquadPlan;
+  /** 各阶段在册成员名(.game 层维护,阶段机只读计数)。 */
+  attackers: readonly string[];
+  healers: readonly string[];
+  /** 本次出击累计折损(含撤退路上阵亡)。 */
+  losses: number;
+}
+
+export interface AssaultObservation {
+  /** 新鲜情报显示目标房武装已清零(完成判据)。 */
+  threatCleared: boolean;
+  /** 全员已进目标房(行军完成判据,.game 层按 room.name 计数)。 */
+  squadInRoom: boolean;
+}
+
+export interface AssaultVerdict {
+  phase: AssaultPhase;
+  complete: boolean;
+  withdrawReason?: 'losses' | 'crippled' | undefined;
+}
+
+/**
+ * 阶段机(纯):完成判据优先于撤退判据(清场了就不白撤);
+ * 撤退判据两条:折损超预算(误判优势)、攻击手折半(打不动了)。
+ * 医疗全灭但攻击手齐整时继续(守家实证:攻击手硬够时医疗只是续航)。
+ */
+export function advanceAssault(state: AssaultState, obs: AssaultObservation): AssaultVerdict {
+  if (state.phase === 'done') return { phase: 'done', complete: true };
+  const attackersAlive = state.attackers.length;
+  const squadFielded = attackersAlive + state.healers.length;
+  if (obs.threatCleared && state.phase === 'engage') return { phase: 'done', complete: true };
+  // 撤退判据只在开拔后(travel/engage)生效:集结期队伍天然不满编,
+  // "折半/折损"是战场状态,不是集合状态(§不让整队无限等待——集合期
+  // 的超时由 .game 层集结时限另行把门)。
+  if (state.phase !== 'muster') {
+    if (state.losses >= ASSAULT_LOSS_BUDGET && squadFielded > 0) {
+      return { phase: 'withdraw', complete: false, withdrawReason: 'losses' };
+    }
+    if (attackersAlive < Math.ceil(state.plan.attackers / 2) && squadFielded > 0) {
+      return { phase: 'withdraw', complete: false, withdrawReason: 'crippled' };
+    }
+  }
+  if (state.phase === 'muster' && attackersAlive >= state.plan.attackers && state.healers.length >= state.plan.healers) {
+    return { phase: 'travel', complete: false };
+  }
+  if (state.phase === 'travel' && obs.squadInRoom) {
+    return { phase: 'engage', complete: false };
+  }
+  return { phase: state.phase, complete: false };
+}
+
+/** 突袭孵化决策输入:在飞小队台账 + 存量计数(.game 层含 spawning 计)。 */
+export interface AssaultSpawnNeedArgs {
+  intel: IntelMemory;
+  aliveAttackers: number;
+  aliveHealers: number;
+  workers: number;
+  capacity: number;
+  energyAvailable: number;
+  now: number;
+}
+
+export interface AssaultSpawnNeed {
+  role: 'assaulter' | 'medic';
+  target: string;
+  bodyCost: number;
+  /** 立队时的编成(仅首具返回;补员时在飞小队已有编成)。 */
+  plan?: AssaultSquadPlan;
+}
+
+/**
+ * 突袭补员(纯):冷却已过;无在飞小队时对榜首目标立队(先攻击手);
+ * 有在飞小队时按编成缺口补员(攻击手优先,医疗垫后)。战争是最后
+ * 顺位盈余:工人地板之后才轮到。返回下一具该孵的兵种与目标。
+ */
+export function assaultSpawnNeed(args: AssaultSpawnNeedArgs): AssaultSpawnNeed | null {
+  const cooldownActive = args.intel.lastAssaultEndAt !== undefined
+    && args.now - args.intel.lastAssaultEndAt < ASSAULT_COOLDOWN;
+  if (cooldownActive) return null;
+  if (args.workers < ASSAULT_WORKER_FLOOR) return null;
+  const state = args.intel.assault;
+  if (!state || state.phase === 'withdraw') {
+    if (state) return null;
+    const target = evaluateAssaultTargets({ rooms: args.intel.rooms, distances: args.intel.distances ?? {}, now: args.now })[0];
+    if (!target) return null;
+    if (args.capacity < ASSAULTER_BODY_COST || args.energyAvailable < ASSAULTER_BODY_COST) return null;
+    const plan = planAssaultSquad(target.armed);
+    return { role: 'assaulter', target: target.name, bodyCost: ASSAULTER_BODY_COST, plan };
+  }
+  const target = state.target;
+  if (args.aliveAttackers < state.plan.attackers) {
+    if (args.capacity < ASSAULTER_BODY_COST || args.energyAvailable < ASSAULTER_BODY_COST) return null;
+    return { role: 'assaulter', target, bodyCost: ASSAULTER_BODY_COST };
+  }
+  if (args.aliveHealers < state.plan.healers) {
+    if (args.capacity < SUPPORT_BODY_COST || args.energyAvailable < SUPPORT_BODY_COST) return null;
+    return { role: 'medic', target, bodyCost: SUPPORT_BODY_COST };
+  }
+  return null;
+}

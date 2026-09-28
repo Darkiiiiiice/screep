@@ -42,6 +42,7 @@ const marketProbe = args.includes('--market-probe');
 const factoryProbe = args.includes('--factory-probe');
 const squadProbe = args.includes('--squad-probe');
 const raidProbe = args.includes('--raid-probe');
+const assaultProbe = args.includes('--assault-probe');
 const mineralProbe = args.includes('--mineral-probe');
 const linkplaceProbe = args.includes('--linkplace-probe');
 assert(!linkplaceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--linkplace-probe requires --lifecycle --logistics');
@@ -51,6 +52,7 @@ assert(!marketProbe || labsProbe, '--market-probe requires --labs-probe (market 
 assert(!factoryProbe || labsProbe, '--factory-probe requires --labs-probe (factory rides the labs fixture)');
 assert(!squadProbe || combatProbe, '--squad-probe requires --combat-probe (squad rides the combat fixture)');
 assert(!raidProbe || marketProbe, '--raid-probe requires --market-probe (raid rides the market fixture with its W0N2 + npc user)');
+assert(!assaultProbe || lifecycle && logistics, '--assault-probe requires --lifecycle --logistics');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -64,7 +66,7 @@ assert(!minersProbe || lifecycle && logistics && !construction && !fairnessProbe
 assert(!claimProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe, '--claim-probe requires --lifecycle --logistics');
 assert(!remoteProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe, '--remote-probe requires --lifecycle --logistics');
 assert(!colonizeProbe || lifecycle && logistics && !construction && !fairnessProbe && !progressionProbe && !intelProbe && !minersProbe && !claimProbe && !remoteProbe, '--colonize-probe requires --lifecycle --logistics');
-const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : linksProbe ? 600 : linkplaceProbe ? 1500 : mineralProbe ? 2400 : raidProbe ? 3000 : labsProbe ? 2400 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
+const tickCount = trafficRecovery ? 120 : fairnessProbe ? 600 : lifecycle ? (construction ? 3100 : progressionProbe ? 5500 : minersProbe ? 300 : claimProbe ? 600 : colonizeProbe ? 2400 : combatProbe ? 1200 : storageProbe ? 1200 : linksProbe ? 600 : linkplaceProbe ? 1500 : mineralProbe ? 2400 : assaultProbe ? 3000 : raidProbe ? 3000 : labsProbe ? 2400 : remoteProbe ? 1500 : intelProbe ? 1500 : recovery || logistics ? 600 : 3100) : 6;
 const variant = args.find((arg) => !arg.startsWith('--')) ?? 'fresh';
 assert(fixture.variants[variant], `unknown variant: ${variant}`);
 const injectFailure = args.includes('--inject-failure');
@@ -73,9 +75,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -425,6 +427,39 @@ try {
       },
     }));
   }
+  if (assaultProbe) {
+    // M7-4 突袭小队:W0N2 被武装外人蹲守(无塔/无主/有源),RCL4 暖启动母房。
+    // 编成 3 攻击手+2 医疗;母房只把门不对抗(守家夹具不叠加,威胁全在邻房)。
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 4, progress: 0 } });
+    for (const [x, y] of [[20, 25], [30, 25], [25, 19], [19, 25], [31, 25], [20, 20], [28, 28], [21, 27], [27, 20], [29, 24]]) {
+      await server.world.addRoomObject(fixture.room, 'extension', x, y, { user: bot.id, store: { energy: 100 }, storeCapacityResource: { energy: 100 }, hits: 1000, hitsMax: 1000 });
+    }
+    await db['rooms.objects'].update({ type: 'spawn', room: fixture.room }, { $set: { store: { energy: 300 }, energy: 300 } });
+    for (const [i, [x, y]] of [[20, 20], [22, 22], [28, 28], [24, 20], [20, 24], [28, 24]].entries()) {
+      await server.world.addRoomObject(fixture.room, 'creep', x, y, {
+        user: bot.id, name: `worker-seeded-${i}`, body: [{ type: 'work', hits: 100 }, { type: 'carry', hits: 100 }, { type: 'move', hits: 100 }],
+        hits: 300, hitsMax: 300, store: { energy: 0 }, storeCapacity: 50, fatigue: 0, spawning: false, ageTime: 1501, actionLog: {},
+      });
+    }
+    await server.world.addRoom('W0N2');
+    await server.world.setTerrain('W0N2', new TerrainMatrix());
+    await server.world.addRoomObject('W0N2', 'controller', 25, 40, { user: null, level: 0 });
+    for (const [x, y] of fixture.sources) {
+      await server.world.addRoomObject('W0N2', 'source', x, y, { energy: 3000, energyCapacity: 3000, nextRegenerationTime: 301 });
+    }
+    // intel 直种(W0N2 武装 2,新鲜)+ assault 开关。logisticsEnabled/schema 两个
+    // 隐藏闸照抄 raid 夹具判例。
+    const env = server.common.storage.env;
+    await env.set(env.keys.MEMORY + bot.id, JSON.stringify({
+      logisticsEnabled: true,
+      assaultEnabled: true,
+      intel: { schema: 1,
+        rooms: { W0N2: { observedAt: 0, sources: fixture.sources.map(([x, y], i) => ({ id: `s${i}`, x, y })), threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0 }, controller: { level: 0 } } },
+        distances: { W0N2: 1 },
+      },
+    }));
+    report.assault = { target: 'W0N2', squatters: ['Squatter-1', 'Squatter-2'], minHits: 2000 };
+  }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
     // builders get 2-WORK bodies; the AI must place and finish the remaining two.
@@ -655,6 +690,27 @@ try {
         });
       }
       if (i === 600) console.log('[squad] soft raider campaign starts (5000 hp, 20 dps)');
+    }
+    if (assaultProbe && i <= 2100 && i % 25 === 0) {
+      // 无 AI 的注入敌会 ~100 tick 自灭(M7-1 同象):持续补投保证威胁窗口
+      // 覆盖小队孵化+行军期;歼敌判定认"终帧不在场+完成台账落地"。
+      const objs = await server.world.roomObjects('W0N2');
+      for (const [name, x] of [['Squatter-1', 24], ['Squatter-2', 26]]) {
+        if (!objs.some(o => o.type === 'creep' && o.name === name)) {
+          await server.world.addRoomObject('W0N2', 'creep', x, 34, {
+            user: '2', name, body: [
+              ...Array.from({ length: 2 }, () => ({ type: 'attack', hits: 100 })),
+              ...Array.from({ length: 20 }, () => ({ type: 'move', hits: 100 })),
+            ],
+            hits: 2000, hitsMax: 2000, store: {}, storeCapacity: 0, fatigue: 0, spawning: false, ageTime: 4000, actionLog: {},
+          });
+        }
+      }
+      if (i === 0) console.log('[assault] squatters seeded in W0N2 (2x 2000hp, 20dps)');
+    }
+    if (assaultProbe && i % 5 === 0) {
+      const sq = (await server.world.roomObjects('W0N2')).filter(o => o.type === 'creep' && report.assault.squatters.includes(o.name));
+      if (sq.length > 0) report.assault.minHits = Math.min(report.assault.minHits, ...sq.map(o => o.hits ?? 2000));
     }
     if (combatProbe && i === 850 && !squadProbe) {
       for (const [name, x] of [['Raider-2', 33], ['Raider-3', 35]]) {
@@ -1199,6 +1255,29 @@ try {
         const finalTicks = lastTicks?.memory.intel.rooms.W0N2.controller.reservationTicks;
         check('foreign reservation stripped past natural decay', typeof finalTicks === 'number' && finalTicks < 2000);
       }
+    if (assaultProbe) {
+      const memSeries = report.ticks.map(t => t.memory.intel ?? {});
+      // 榜单锁敌:突袭目标榜曾收录 W0N2
+      const boardHit = memSeries.some(m => ((m.assaulting?.targets) ?? []).some(x => x.name === 'W0N2'));
+      check('assault board locked the armed squatter', boardHit);
+      // 阶段推进:曾抵达交战阶段
+      check('squad reached the engage phase', memSeries.some(m => m.assault?.phase === 'engage'));
+      // 歼敌:两只蹲守者终帧不在场
+      const lastObjs = [...report.ticks].reverse().find(t => t.objects.some(o => o.type === 'creep'))?.objects ?? [];
+      const squatterGone = report.assault.squatters.every(n => !lastObjs.some(o => o.type === 'creep' && o.name === n));
+      check('squatters cleared from the target room', squatterGone);
+      // 真打过的取证:蹲守者曾掉血(排除"消失窗口假完成"路径)
+      check('squatters took real damage from the squad', report.assault.minHits < 2000);
+      // 完成:台账落地(assault 收档,冷却与目标记录在案)
+      const lastMem = [...report.ticks].reverse().find(t => t.memory.intel)?.memory.intel ?? {};
+      check('assault ledger closed with cooldown recorded',
+        lastMem.assault === undefined && lastMem.lastAssaultTarget === 'W0N2' && typeof lastMem.lastAssaultEndAt === 'number');
+      // 母房无恙:spawn 仍在,工人地板未破
+      const lastTick = report.ticks.at(-1);
+      const homeSpawn = lastTick.objects.some(o => o.type === 'spawn' && o.user !== undefined);
+      const workersLeft = Object.keys(lastTick.memory.creeps ?? {}).filter(n => n.startsWith('worker')).length;
+      check('home economy intact after the raid', homeSpawn && workersLeft >= 1);
+    }
     if (factoryProbe) {
       const good = [...report.ticks].reverse().find(t => t.objects.some(o => o.type === 'factory' && o.hits > 0)) ?? report.ticks.at(-1);
       const last = good.objects;
