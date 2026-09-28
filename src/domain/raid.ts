@@ -16,6 +16,10 @@ import type { IntelMemory, RoomIntel } from './intel';
 export const ASSAULTER_BODY_COST = 390;
 /** 医疗兵身体沿用守家配方 [HEAL×2, MOVE×2] = 700(combat.ts HEALER_COST)。 */
 export const SUPPORT_BODY_COST = 700;
+/** 突袭兵身体部件(单一真相:bootstrap 孵化与强化算量共用)。 */
+export const ASSAULTER_BODY_PARTS = ['attack', 'attack', 'attack', 'move', 'move', 'move'] as const;
+/** 医疗兵身体部件(2×HEAL(250)+2×MOVE(50)=600)。 */
+export const SUPPORT_BODY_PARTS = ['heal', 'heal', 'move', 'move'] as const;
 /** 突袭是满员工人口粮之上的盈余支出:地板同其他盈余岗。 */
 export const ASSAULT_WORKER_FLOOR = 4;
 /** 过远的武装房不打:行军暴露与补给损耗失去经济意义。 */

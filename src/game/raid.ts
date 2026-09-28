@@ -1,12 +1,18 @@
 import { advanceAssault, ASSAULT_CLEAR_HOLD, ASSAULT_MUSTER_TIMEOUT, evaluateAssaultTargets } from '../domain/raid';
+import { BOOST_ENERGY_PER_PART, BOOST_MINERAL_PER_PART, BOOST_WAIT_LIMIT, combatBoostDemand, squadBoostLeg } from '../domain/boost';
 import type { IntelMemory } from '../domain/intel';
 import { markUnreachable } from '../domain/intel';
 import { intelState, observeRoom } from './intel';
+import { labMineral } from './labs';
 
 declare global {
   interface CreepMemory {
     /** 突袭小队目标房名(M7-6)。 */
     assaultTarget?: string;
+    /** 强化等待截止(M7-7,集结到 lab 后起算);超时放弃强化开拔。 */
+    boostWaitUntil?: number;
+    /** 强化已放弃(无料/超时/领满):置位后直达集结格,不再绕 lab。 */
+    boostSkipped?: boolean;
   }
   interface Memory { assaultEnabled?: boolean }
 }
@@ -98,6 +104,39 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       // 集结期身处目标房不是"到位",是脱离编队的孤身送死(取证:医疗被
       // 挤过边界后原地挨打到死)。寻路抛错按不可达退役。
       if (!mem.home) { dropFromRoster(intel, creep.name); creep.suicide(); continue; }
+      // M7-7 强化腿:编成期先到强化 lab 领料再开拔。强化是增益不是前提:
+      // 无料/超时(BOOST_WAIT_LIMIT ≪ 集结超时)即放弃开拔,不拖任务后腿。
+      if (!mem.boostSkipped) {
+        const leg = squadBoostLeg(creep);
+        if (!leg) { mem.boostSkipped = true; }
+        else {
+          const deadline = mem.boostWaitUntil ?? (mem.boostWaitUntil = Game.time + BOOST_WAIT_LIMIT);
+          if (Game.time >= deadline) { mem.boostSkipped = true; }
+          else {
+            const has = (l: StructureLab): boolean =>
+              (l.store.getUsedCapacity(leg.compound as ResourceConstant) ?? 0) >= BOOST_MINERAL_PER_PART
+              && (l.store.getUsedCapacity(RESOURCE_ENERGY) ?? 0) >= BOOST_ENERGY_PER_PART;
+            const labs = creep.room.find(FIND_MY_STRUCTURES)
+              .filter((s): s is StructureLab => s.structureType === STRUCTURE_LAB)
+              .filter((l) => labMineral(l) === leg.compound);
+            const lab = labs.find(has) ?? labs[0];
+            if (!lab) { mem.boostSkipped = true; }
+            else if (!creep.pos.isNearTo(lab.pos)) {
+              try { creep.moveTo(lab.pos, { reusePath: 10 }); } catch {
+                markUnreachable(intel, creep.room.name, Game.time);
+                dropFromRoster(intel, creep.name);
+                creep.suicide();
+              }
+              continue;
+            } else {
+              // 邻接即领料(料足时 boostCreep 一次强化全部可强化部件);
+              // 料不足就贴着等(production 5/tick),deadline 兜底。
+              if (has(lab)) lab.boostCreep(creep);
+              continue;
+            }
+          }
+        }
+      }
       const tile = exitTileOf(mem.home, target);
       try {
         if (!creep.pos.isNearTo(tile)) creep.moveTo(tile, { reusePath: 10 });
@@ -194,4 +233,12 @@ export function exitTileOf(home: string, target: string): RoomPosition {
   const x = dx > 0 ? 2 : dx < 0 ? 47 : 25;
   const y = dy > 0 ? 2 : dy < 0 ? 47 : 25;
   return new RoomPosition(x, y, home);
+}
+
+/** 当前任务的强化需求(M7-7,muster 期才产——开拔后强化料即失效;无任务返回 undefined)。 */
+export function currentBoostDemand(): Record<string, number> | undefined {
+  if (Memory.assaultEnabled !== true) return undefined;
+  const state = intelState().assault;
+  if (!state || state.phase !== 'muster') return undefined;
+  return combatBoostDemand(state.plan);
 }

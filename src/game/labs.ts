@@ -1,4 +1,4 @@
-import { chooseRecipe } from '../domain/labs';
+import { chooseRecipeWithDemand } from '../domain/boost';
 import type { LabRecipe } from '../domain/labs';
 
 /**
@@ -34,9 +34,9 @@ export function labMineral(lab: StructureLab): string | undefined {
   return keys.length ? keys[0] : undefined;
 }
 
-/** 反应当前应做的配方(供供料方对齐);无原料返回 null。 */
-export function currentRecipe(stock: Readonly<Record<string, number>>): LabRecipe | undefined {
-  return chooseRecipe({ stock });
+/** 反应当前应做的配方(供供料方对齐);有任务需求时强化料优先(M7-7);无原料返回 undefined。 */
+export function currentRecipe(stock: Readonly<Record<string, number>>, demand?: Readonly<Record<string, number>>): LabRecipe | undefined {
+  return demand ? chooseRecipeWithDemand({ stock, demand }) : chooseRecipeWithDemand({ stock });
 }
 
 /** terminal 库存快照(纯数据,喂 chooseRecipe);只含非零项。 */

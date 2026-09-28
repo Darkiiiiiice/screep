@@ -8,6 +8,7 @@ import { extensionTiles, extractorSite, factorySite, labSite, linkSite, preserve
 import { LAB_INPUT_LACK } from '../domain/labs';
 import { FACTORY_MINERAL_FLOOR } from '../domain/factory';
 import { currentRecipe, labMineral, terminalStock } from './labs';
+import { currentBoostDemand } from './raid';
 
 declare global {
   interface CreepMemory {
@@ -693,7 +694,7 @@ export function runMinerals(room: Room): void {
         && ((factory.store.getUsedCapacity(carriedType as ResourceConstant) ?? 0) < FACTORY_MINERAL_FLOOR);
       if (factoryHungry && harvester.transfer(factory, carriedType as ResourceConstant) === ERR_NOT_IN_RANGE) travel(harvester, factory.pos, 1);
       else if (!factoryHungry) {
-        const recipe = currentRecipe(terminalStock(terminal));
+        const recipe = currentRecipe(terminalStock(terminal), currentBoostDemand());
         const target = recipe && recipe.inputs.includes(carriedType)
           ? labs.find(l => canAccept(l, carriedType))
           : undefined;
@@ -704,7 +705,7 @@ export function runMinerals(room: Room): void {
     }
     // 取货半程:仅在恰已站在 terminal 旁时顺路捎带——不为取料专门跑腿
     // (采矿是本职;terminal 有矿的窗口在送矿时自然出现)。
-    const recipe = currentRecipe(terminalStock(terminal));
+    const recipe = currentRecipe(terminalStock(terminal), currentBoostDemand());
     if (recipe && harvester.pos.isNearTo(terminal.pos)) {
       const input = recipe.inputs.find(res => (terminal.store.getUsedCapacity(res as ResourceConstant) ?? 0) > 0
         && labs.some(l => canAccept(l, res)));

@@ -5,7 +5,7 @@ import { guardSpawnNeed } from '../domain/combat';
 import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { attackerSpawnNeed, evaluateRaidTargets } from '../domain/expedition';
-import { assaultSpawnNeed, planAssaultSquad } from '../domain/raid';
+import { ASSAULTER_BODY_PARTS, SUPPORT_BODY_PARTS, assaultSpawnNeed, planAssaultSquad } from '../domain/raid';
 import { driveAssault } from './raid';
 import { runLogistics, runMinerals, runMiners } from './logistics';
 import { driveLabs } from './labs';
@@ -322,7 +322,7 @@ export function runBootstrap(): void {
                             });
                             if (need) {
                               const name = `${need.role}-${room.name}-${Game.time}`;
-                              const rc = idle.spawnCreep(need.role === 'assaulter' ? [ATTACK, ATTACK, ATTACK, MOVE, MOVE, MOVE] : [HEAL, HEAL, MOVE, MOVE],
+                              const rc = idle.spawnCreep(need.role === 'assaulter' ? [...ASSAULTER_BODY_PARTS] : [...SUPPORT_BODY_PARTS],
                                 name, { memory: { role: need.role, assaultTarget: need.target, home: room.name } });
                               // 只在入列成功时登记(spawn 忙时 ERR_BUSY 会造幽灵名册);
                               // 每次成功入列重置集结时限(超时锚=最近增长,非立队时刻)。

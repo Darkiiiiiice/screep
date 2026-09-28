@@ -428,17 +428,41 @@ try {
     }));
   }
   if (assaultProbe) {
-    // M7-6 突袭小队:W0N2 被武装外人蹲守(无塔/无主/有源),RCL4 暖启动母房。
+    // M7-6 突袭小队:W0N2 被武装外人蹲守(无塔/无主/有源),暖启动母房。
     // 编成 3 攻击手+2 医疗;母房只把门不对抗(守家夹具不叠加,威胁全在邻房)。
-    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 4, progress: 0 } });
-    for (const [x, y] of [[20, 25], [30, 25], [25, 19], [19, 25], [31, 25], [20, 20], [28, 28], [21, 27], [27, 20], [29, 24]]) {
+    // M7-7 强化链:boostCreep 有 RCL<6 实验室不可用门槛(ERR_RCL_NOT_ENOUGH),
+    // 母房升 RCL6+terminal(掐掉 growth 链的 terminal 工地)+三 lab 簇——
+    // 双输入 H/U 直种、输出 lab 持能,三件 id 序分配(引擎"id 序前两输入末输出"
+    // 约定,任一件排第三都几何合法:三角两两距离 ≤2)。
+    await db['rooms.objects'].update({ type: 'controller', room: fixture.room }, { $set: { level: 6, progress: 0 } });
+    await server.world.addRoomObject(fixture.room, 'terminal', 23, 23, {
+      user: bot.id, store: { energy: 3000, U: 600, H: 600 }, storeCapacityResource: { energy: 30000 }, hits: 3000, hitsMax: 3000, cooldown: 0,
+    });
+    for (const [x, y] of [[24, 15], [26, 15], [25, 16]]) {
+      await server.world.addRoomObject(fixture.room, 'lab', x, y, { user: bot.id, store: {}, hits: 3000, hitsMax: 3000, cooldown: 0 });
+    }
+    // storage+link 直种(RCL6 段位即满):掐掉 growth 链的工地源——否则 11+ 工地
+    // 让 builder(先于战争顺位)反复开票,集结期医疗 600 等不齐(红跑实证抖动源)。
+    await server.world.addRoomObject(fixture.room, 'storage', 24, 22, {
+      user: bot.id, store: { energy: 5000 }, storeCapacityResource: { energy: 30000 }, hits: 10000, hitsMax: 10000,
+    });
+    for (const [x, y] of [[12, 12], [38, 12], [25, 33]]) {
+      await server.world.addRoomObject(fixture.room, 'link', x, y, { user: bot.id, store: {}, storeCapacityResource: { energy: 800 }, hits: 1000, hitsMax: 1000, cooldown: 0 });
+    }
+    const boostLabs = (await db['rooms.objects'].find({ type: 'lab', room: fixture.room })).sort((a, b) => String(a._id).localeCompare(String(b._id)));
+    await db['rooms.objects'].update({ _id: boostLabs[0]._id }, { $set: { store: { H: 1000 }, storeCapacityResource: { energy: 2000, H: 3000 } } });
+    await db['rooms.objects'].update({ _id: boostLabs[1]._id }, { $set: { store: { U: 1000 }, storeCapacityResource: { energy: 2000, U: 3000 } } });
+    await db['rooms.objects'].update({ _id: boostLabs[2]._id }, { $set: { store: { energy: 1000 }, storeCapacityResource: { energy: 2000, UH: 3000 } } });
+    // RCL6 满编 20 扩展满能(缓冲 2300):小队 390/600 串行孵化跨 ~1500t,
+    // 缓冲不足会让第 2 医疗 600 永远等不齐(集结超时假撤)。
+    for (const [x, y] of [[20, 25], [30, 25], [25, 19], [19, 25], [31, 25], [20, 20], [28, 28], [21, 27], [27, 20], [29, 24], [18, 18], [22, 17], [28, 17], [32, 18], [17, 22], [33, 22], [17, 28], [33, 28], [22, 32], [28, 32]]) {
       await server.world.addRoomObject(fixture.room, 'extension', x, y, { user: bot.id, store: { energy: 100 }, storeCapacityResource: { energy: 100 }, hits: 1000, hitsMax: 1000 });
     }
     await db['rooms.objects'].update({ type: 'spawn', room: fixture.room }, { $set: { store: { energy: 300 }, energy: 300 } });
     for (const [i, [x, y]] of [[20, 20], [22, 22], [28, 28], [24, 20], [20, 24], [28, 24]].entries()) {
       await server.world.addRoomObject(fixture.room, 'creep', x, y, {
         user: bot.id, name: `worker-seeded-${i}`, body: [{ type: 'work', hits: 100 }, { type: 'carry', hits: 100 }, { type: 'move', hits: 100 }],
-        hits: 300, hitsMax: 300, store: { energy: 0 }, storeCapacity: 50, fatigue: 0, spawning: false, ageTime: 1501, actionLog: {},
+        hits: 300, hitsMax: 300, store: { energy: 0 }, storeCapacity: 50, fatigue: 0, spawning: false, ageTime: 4000, actionLog: {},
       });
     }
     await server.world.addRoom('W0N2');
@@ -464,7 +488,7 @@ try {
         distances: { W0N2: 1 },
       },
     }));
-    report.assault = { target: 'W0N2', squatters: ['Squatter-1', 'Squatter-2'], minHits: 2000, clearedAt: null, phases: {} };
+    report.assault = { target: 'W0N2', squatters: ['Squatter-1', 'Squatter-2'], minHits: 2000, clearedAt: null, phases: {}, uhPeak: 0, uhBoosted: 0 };
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -727,6 +751,18 @@ try {
         const ph = (JSON.parse(raw || '{}').intel ?? {}).assault?.phase;
         if (ph) report.assault.phases[ph] = i;
       } catch { /* 采样失败不影响世界 */ }
+      // 强化链证据(M7-7):产物峰值(反应链通)+ 曾见 UH 强化部件(boostCreep 通),
+      // 成员收档即解散,终帧扫不到——按 ever-seen 记账。
+      const home = await server.world.roomObjects(fixture.room);
+      let boosted = 0;
+      for (const o of home) {
+        if (o.type === 'creep' && Array.isArray(o.body)) {
+          boosted = Math.max(boosted, o.body.filter(p => p.boost === 'UH').length);
+        } else if (o.type === 'lab' && o.store && (o.store.UH ?? 0) > 0) {
+          report.assault.uhPeak = Math.max(report.assault.uhPeak, o.store.UH);
+        }
+      }
+      report.assault.uhBoosted = Math.max(report.assault.uhBoosted, boosted);
     }
     if (combatProbe && i === 850 && !squadProbe) {
       for (const [name, x] of [['Raider-2', 33], ['Raider-3', 35]]) {
@@ -1282,6 +1318,10 @@ try {
       // 折损撤退的任务也能静默全绿——必须断言全程未见 withdraw 相位。
       check('mission ended in clean victory, no withdrawal',
         report.assault.phases.engage !== undefined && report.assault.phases.withdraw === undefined);
+      // M7-7 强化链:UH 产物曾 ≥ 一个攻击手的满额(90=3件×30,反应链通);
+      // 攻击手身体曾见 UH 强化件(boostCreep 通,强化腿真实执行)。
+      check('UH produced by the reaction line', report.assault.uhPeak >= 90);
+      check('assaulters boosted with UH before departing', report.assault.uhBoosted >= 1);
       // 歼敌:受击后清场且保持到窗口后段(证据取自 W0N2 直采采样;母房
       // objects 不含邻房,按它断"清场"恒真——空断言已废)。
       check('squatters cleared from the target room after damage',
