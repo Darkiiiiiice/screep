@@ -26,7 +26,7 @@ for (let attempt = 0; attempt < 180; attempt++) {
     summary.endTick = time.time;
     summary.samples++;
     const freshErrors = state?.errors?.filter(e => e.tick >= summary.startTick) ?? [];
-    const sample = { at: new Date().toISOString(), tick: time.time, heartbeat: state?.heartbeat, errors: freshErrors, workers: workers.map(o => ({ name: o.name, x: o.x, y: o.y, energy: o.store?.energy, ageTime: o.ageTime })), level: controller?.level, progress: controller?.progress, spawn: room.objects.filter(o => o.type === 'spawn').map(o => ({ energy: o.store?.energy, spawning: o.spawning })), rooms: state?.rooms, degraded: state?.degraded };
+    const sample = { at: new Date().toISOString(), tick: time.time, heartbeat: state?.heartbeat, errors: freshErrors, workers: workers.map(o => ({ name: o.name, x: o.x, y: o.y, energy: o.store?.energy, ageTime: o.ageTime })), level: controller?.level, progress: controller?.progress, spawn: room.objects.filter(o => o.type === 'spawn').map(o => ({ energy: o.store?.energy, spawning: o.spawning })), energyAvailable: room.objects.filter(o => o.type === 'spawn' || o.type === 'extension').reduce((sum, o) => sum + (o.store?.energy ?? 0), 0), containers: room.objects.filter(o => o.type === 'container').map(o => ({ x: o.x, y: o.y, energy: o.store?.energy ?? 0 })), rooms: state?.rooms, degraded: state?.degraded };
     appendFileSync(`${dir}/samples.jsonl`, `${JSON.stringify(sample)}\n`);
     console.log(`[live] tick=${time.time} heartbeat=${state?.heartbeat} workers=${workers.length} RCL=${controller?.level} progress=${controller?.progress} errors=${freshErrors.length}`);
     const unhealthy = !state || time.time - state.heartbeat > 10 || !workers.length || freshErrors.length > 0;

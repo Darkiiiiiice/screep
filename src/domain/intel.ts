@@ -309,6 +309,11 @@ export function claimerSpawnNeed(args: {
   // 读数 2441 时真实已跌破刷新线,isStale 后彻底堵死,全靠 scout 兜底重启)。
   const effectiveTicks = (controller?.reservationTicks ?? 0) - Math.max(0, args.now - room.observedAt);
   if (controller?.reserver === args.me && effectiveTicks >= CLAIMER_RESERVE_REFRESH) return null;
+  // 外援预定自守:评估榜有刷新间隔,榜单滞后期间门禁必须自己拒(线上实证
+  // 2026-09-28:W36S2 被 darkiiiiiice 预定后评估未刷新,claimer 650/具按
+  // 冷却节奏连续自烬)。余量同口径按情报年龄折算,衰减归零即解锁(与
+  // evaluateColonizeTargets 同一折算)。
+  if (controller?.reserver !== undefined && controller.reserver !== args.me && effectiveTicks > 0) return null;
   return target;
 }
 
