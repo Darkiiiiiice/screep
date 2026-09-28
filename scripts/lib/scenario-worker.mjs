@@ -1278,6 +1278,10 @@ try {
       check('assault board locked the armed squatter', boardHit);
       // 阶段推进:曾抵达交战阶段(5-tick 直采,快照序列会漏短相位窗)
       check('squad reached the engage phase', report.assault.phases.engage !== undefined);
+      // 完胜区分:补投已停,残余蹲守者自然自灭后 clearedAt 照落、ledger 照收档,
+      // 折损撤退的任务也能静默全绿——必须断言全程未见 withdraw 相位。
+      check('mission ended in clean victory, no withdrawal',
+        report.assault.phases.engage !== undefined && report.assault.phases.withdraw === undefined);
       // 歼敌:受击后清场且保持到窗口后段(证据取自 W0N2 直采采样;母房
       // objects 不含邻房,按它断"清场"恒真——空断言已废)。
       check('squatters cleared from the target room after damage',
