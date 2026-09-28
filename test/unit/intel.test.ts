@@ -286,10 +286,10 @@ it('spawns a claimer only on full surplus against the top evaluated target needi
   staleRead.rooms.W0N2!.controller = { level: 0, reserver: 'me', reservationTicks: 2100 };
   expect(claimerSpawnNeed({ ...base, intel: staleRead })).toBe('W0N2');
   expect(claimerSpawnNeed({ ...base, intel: reserved })).toBe('W0N2');
-  // 外援预定自守(线上实证 2026-09-28:评估榜滞后期间 W36S2 被 darkiiiiiice
-  // 预定,claimer 650/具按冷却节奏连续自烬;衰减口放行一具到场即 suicide):
-  // 榜单目标被外人预定即无条件拒,不看余量余龄——外援 CLAIM 件 600 tick
-  // 必续约,复工走评估榜再准入,不走孵化门。
+  // 外援预定自守:目标房被真正的外人预定时无条件拒,不看余量余龄——
+  // 外人 CLAIM 件 600 tick 必续约,复工走评估榜再准入,不走孵化门。
+  // (自家预定 reserver===me 走补租逻辑,不进本分支;历史教训:曾把自家
+  // 账号 darkiiiiiice 的预定误读为外援——判外援前先 whoami。)
   const foreign = intel();
   foreign.rooms.W0N2!.controller = { level: 0, reserver: 'rival', reservationTicks: 2053 };
   expect(claimerSpawnNeed({ ...base, intel: foreign })).toBeNull();
