@@ -27,7 +27,7 @@ import {
 const intelAt = (observedAt: number, hostiles = 0, armed?: number): RoomIntel => ({
   observedAt,
   sources: [],
-  threat: { hostiles, armed: armed ?? hostiles, towers: 0, keeperLairs: 0 },
+  threat: { hostiles, armed: armed ?? hostiles, towers: 0, keeperLairs: 0, structures: 0 },
 });
 
 it('treats missing or aged observation as stale, fresh as current', () => {
@@ -109,28 +109,28 @@ it('maps a room snapshot into an intel record without losing threat detail', () 
     sources: [{ id: 's1', x: 5, y: 6 }, { id: 's2', x: 30, y: 31 }],
     controller: { level: 3, owner: 'enemy', reserver: 'enemy', reservationTicks: 1200 },
     hostiles: [{ armed: 4 }, { armed: 0 }],
-    towers: 2, keeperLairs: 0, mineral: 'H',
+    towers: 2, keeperLairs: 0, structures: 1, mineral: 'H',
   });
   expect(intel.observedAt).toBe(42);
   expect(intel.sources).toEqual([{ id: 's1', x: 5, y: 6 }, { id: 's2', x: 30, y: 31 }]);
   expect(intel.controller).toEqual({ level: 3, owner: 'enemy', reserver: 'enemy', reservationTicks: 1200 });
-  expect(intel.threat).toEqual({ hostiles: 2, armed: 4, towers: 2, keeperLairs: 0 });
+  expect(intel.threat).toEqual({ hostiles: 2, armed: 4, towers: 2, keeperLairs: 0, structures: 1 });
   expect(intel.mineral).toBe('H');
-  const bare = observe({ name: 'W1N1', now: 7, sources: [], hostiles: [], towers: 0, keeperLairs: 3 });
+  const bare = observe({ name: 'W1N1', now: 7, sources: [], hostiles: [], towers: 0, keeperLairs: 3, structures: 0 });
   expect(bare.controller).toBeUndefined();
   expect(bare.mineral).toBeUndefined();
   expect(bare.threat.keeperLairs).toBe(3);
 });
 
 it('ranks fresh unowned source rooms by sources then distance, excluding untrusted or occupied rooms', () => {
-  const room = (over: Partial<RoomIntel> = {}): RoomIntel => ({ observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, ...over });
+  const room = (over: Partial<RoomIntel> = {}): RoomIntel => ({ observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0, structures: 0 }, ...over });
   const twoSources = room({ sources: [{ id: 's1', x: 1, y: 1 }, { id: 's2', x: 2, y: 2 }] });
   const rooms: Record<string, RoomIntel> = {
     single: room(),
     dual: twoSources,
     far: twoSources,
     stale: room({ observedAt: 100 }),
-    hostile: room({ threat: { hostiles: 1, armed: 2, towers: 0, keeperLairs: 0 } }),
+    hostile: room({ threat: { hostiles: 1, armed: 2, towers: 0, keeperLairs: 0, structures: 0 } }),
     owned: room({ controller: { level: 3, owner: 'someone' } }),
     reserved: room({ controller: { level: 0, reserver: 'someone', reservationTicks: 100 } }),
     barren: room({ sources: [] }),
@@ -142,24 +142,24 @@ it('ranks fresh unowned source rooms by sources then distance, excluding untrust
 });
 
 it('keeps rooms with unarmed passersby on the board', () => {
-  const rooms: Record<string, RoomIntel> = { visited: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 2, armed: 0, towers: 0, keeperLairs: 0 } } };
+  const rooms: Record<string, RoomIntel> = { visited: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 2, armed: 0, towers: 0, keeperLairs: 0, structures: 0 } } };
   expect(evaluateRemoteTargets({ rooms, distances: { visited: 1 }, me: 'me', now: 1200 }).map(t => t.name)).toEqual(['visited']);
 });
 
 it('keeps self-reserved rooms on the board for the DEPLOY step', () => {
-  const rooms: Record<string, RoomIntel> = { mine: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'me', reservationTicks: 4000 } } };
+  const rooms: Record<string, RoomIntel> = { mine: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0, structures: 0 }, controller: { level: 0, reserver: 'me', reservationTicks: 4000 } } };
   expect(evaluateRemoteTargets({ rooms, distances: { mine: 1 }, me: 'me', now: 1200 }).map(t => t.name)).toEqual(['mine']);
   expect(evaluateRemoteTargets({ rooms, distances: { mine: 1 }, me: 'other', now: 1200 })).toEqual([]);
 });
 
 it('returns an empty board when no room qualifies', () => {
-  const rooms: Record<string, RoomIntel> = { hostile: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0 } } };
+  const rooms: Record<string, RoomIntel> = { hostile: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0, structures: 0 } } };
   expect(evaluateRemoteTargets({ rooms, distances: { hostile: 1 }, me: 'me', now: 1200 })).toEqual([]);
 });
 
 
 it('ranks only claimable rooms for colonization: unowned, no live foreign reservation', () => {
-  const room = (over: Partial<RoomIntel> = {}): RoomIntel => ({ observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0 }, ...over });
+  const room = (over: Partial<RoomIntel> = {}): RoomIntel => ({ observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0, structures: 0 }, controller: { level: 0 }, ...over });
   const twoSources = room({ sources: [{ id: 's1', x: 1, y: 1 }, { id: 's2', x: 2, y: 2 }] });
   const rooms: Record<string, RoomIntel> = {
     open: room(),
@@ -168,7 +168,7 @@ it('ranks only claimable rooms for colonization: unowned, no live foreign reserv
     mine: room({ controller: { level: 1, owner: 'me' } }),
     foreignReserved: room({ controller: { level: 0, reserver: 'someone', reservationTicks: 500 } }),
     selfReserved: room({ controller: { level: 0, reserver: 'me', reservationTicks: 4000 } }),
-    hostile: room({ threat: { hostiles: 1, armed: 1, towers: 0, keeperLairs: 0 } }),
+    hostile: room({ threat: { hostiles: 1, armed: 1, towers: 0, keeperLairs: 0, structures: 0 } }),
     noController: (() => { const r = room(); delete r.controller; return r; })(),
     unrouted: room(),
   };
@@ -182,7 +182,7 @@ it('unlocks a colonize target when the foreign reservation has decayed past zero
   // 读数降到 100 → 有效 -200 归零,房间回到可占榜
   // (与 claimer 门禁同一教训:信快照会睡死决策)。
   const rooms: Record<string, RoomIntel> = {
-    contested: { observedAt: 900, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'someone', reservationTicks: 500 } },
+    contested: { observedAt: 900, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0, structures: 0 }, controller: { level: 0, reserver: 'someone', reservationTicks: 500 } },
   };
   expect(evaluateColonizeTargets({ rooms, distances: { contested: 1 }, me: 'me', now: 1200 })).toEqual([]);
   rooms.contested!.controller!.reservationTicks = 100;
@@ -193,7 +193,7 @@ it('unlocks a colonize target when the foreign reservation has decayed past zero
 it('spawns a colonizer only with a free GCL slot and full surplus against the top colonize target', () => {
   const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
     schema: 1,
-    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0 } } },
+    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0, structures: 0 }, controller: { level: 0 } } },
     colonization: { tick: 1000, targets: [{ name: 'W0N2', score: 90, sources: 1, distance: 1 }] },
     ...over,
   });
@@ -219,7 +219,7 @@ it('spawns a colonizer only with a free GCL slot and full surplus against the to
 it('dispatches pioneers only to owned ungraduated colonies within squad cap', () => {
   const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
     schema: 1,
-    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 1, owner: 'me' } } },
+    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0, structures: 0 }, controller: { level: 1, owner: 'me' } } },
     colonies: { W0N2: { claimedAt: 900 } },
     ...over,
   });
@@ -253,7 +253,7 @@ it('dispatches pioneers only to owned ungraduated colonies within squad cap', ()
 it('spawns a claimer only on full surplus against the top evaluated target needing reservation', () => {
   const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
     schema: 1,
-    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0 } } },
+    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0, structures: 0 }, controller: { level: 0 } } },
     evaluation: { tick: 1000, targets: [{ name: 'W0N2', score: 180, sources: 2, distance: 1 }] },
     ...over,
   });
@@ -305,7 +305,7 @@ it('spawns a claimer only on full surplus against the top evaluated target needi
 it('spawns a remote miner only against a self-reserved fresh top target on full surplus', () => {
   const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
     schema: 1,
-    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'me', reservationTicks: 4000 } } },
+    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0, structures: 0 }, controller: { level: 0, reserver: 'me', reservationTicks: 4000 } } },
     evaluation: { tick: 1000, targets: [{ name: 'W0N2', score: 180, sources: 2, distance: 1 }] },
     ...over,
   });
@@ -330,7 +330,7 @@ it('spawns a remote miner only against a self-reserved fresh top target on full 
 it('fields haulers only while a miner is on station, capped per miner', () => {
   const intel = (over: Partial<IntelMemory> = {}): IntelMemory => ({
     schema: 1,
-    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0 }, controller: { level: 0, reserver: 'me', reservationTicks: 4000 } } },
+    rooms: { W0N2: { observedAt: 1000, sources: [{ id: 's1', x: 1, y: 1 }], threat: { hostiles: 0, armed: 0, towers: 0, keeperLairs: 0, structures: 0 }, controller: { level: 0, reserver: 'me', reservationTicks: 4000 } } },
     evaluation: { tick: 1000, targets: [{ name: 'W0N2', score: 180, sources: 2, distance: 1 }] },
     ...over,
   });

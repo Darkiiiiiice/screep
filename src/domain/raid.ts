@@ -20,6 +20,10 @@ export const SUPPORT_BODY_COST = 700;
 export const ASSAULTER_BODY_PARTS = ['attack', 'attack', 'attack', 'move', 'move', 'move'] as const;
 /** 医疗兵身体部件(2×HEAL(250)+2×MOVE(50)=600)。 */
 export const SUPPORT_BODY_PARTS = ['heal', 'heal', 'move', 'move'] as const;
+/** 拆墙手身体(M7-8):[WORK×4, MOVE×4] = 600——dismantle 50/件/tick(引擎
+ * DISMANTLE_POWER 实证),200/tick 裸拆、ZH 强化后 400/tick;4 MOVE 平原全速。 */
+export const DISMANTLER_BODY_COST = 600;
+export const DISMANTLER_BODY_PARTS = ['work', 'work', 'work', 'work', 'move', 'move', 'move', 'move'] as const;
 /** 突袭是满员工人口粮之上的盈余支出:地板同其他盈余岗。 */
 export const ASSAULT_WORKER_FLOOR = 4;
 /** 过远的武装房不打:行军暴露与补给损耗失去经济意义。 */
@@ -42,6 +46,8 @@ export interface AssaultCandidate {
   distance: number;
   /** 观测到的武装部件总数(敌方防御规模)。 */
   armed: number;
+  /** 敌建筑数(M7-8 围攻拆除目标池;>0 时编队带拆墙手)。 */
+  structures: number;
 }
 
 /**
@@ -62,7 +68,7 @@ export function evaluateAssaultTargets(args: { rooms: Record<string, RoomIntel>;
     if (intel.sources.length === 0) continue;
     const distance = args.distances[name];
     if (distance === undefined || distance > ASSAULT_MAX_DISTANCE) continue;
-    candidates.push({ name, distance, armed: intel.threat.armed });
+    candidates.push({ name, distance, armed: intel.threat.armed, structures: intel.threat.structures });
   }
   return candidates.sort((a, b) => a.armed - b.armed || a.name.localeCompare(b.name));
 }
@@ -70,15 +76,18 @@ export function evaluateAssaultTargets(args: { rooms: Record<string, RoomIntel>;
 export interface AssaultSquadPlan {
   attackers: number;
   healers: number;
+  /** 拆墙手(M7-8):目标房有敌建筑时带 1 具——无战力,清场后开工拆建筑,
+   * 拆完才算任务完成(围攻语义);v1 单兵,多墙房留待围攻刀扩编。 */
+  dismantlers: number;
 }
 
 /**
  * 小队编成(纯):局部优势原则——攻击手 = 武装数 + 1(封顶 4),
  * 医疗 = ceil(攻击手/2)(守家 1:1 是单兵场景; away 小队 2:1 够用)。
  */
-export function planAssaultSquad(armed: number): AssaultSquadPlan {
+export function planAssaultSquad(armed: number, structures = 0): AssaultSquadPlan {
   const attackers = Math.min(Math.max(1, armed) + 1, ASSAULT_MAX_ATTACKERS);
-  return { attackers, healers: Math.ceil(attackers / 2) };
+  return { attackers, healers: Math.ceil(attackers / 2), dismantlers: structures > 0 ? 1 : 0 };
 }
 
 /** 突袭阶段:集结(母房出口)→ 行军(跨房)→ 交战 → 撤退/完成。 */
@@ -91,6 +100,7 @@ export interface AssaultState {
   /** 各阶段在册成员名(.game 层维护,阶段机只读计数)。 */
   attackers: readonly string[];
   healers: readonly string[];
+  dismantlers: readonly string[];
   /** 本次出击累计折损(含撤退路上阵亡)。 */
   losses: number;
 }
@@ -103,6 +113,8 @@ export interface AssaultObservation {
   /** 全员强化已了结(已强化/已放弃/本无化合物;M7-7 开拔闸):满编只是
    * 人数到齐,不吃这闸会把强化腿整段跳过(探针实证 3 攻 0 强化开拔)。 */
   squadBoostResolved: boolean;
+  /** 目标房敌建筑已清零(M7-8 围攻完成判据;无拆墙手编成的任务忽略)。 */
+  structuresCleared: boolean;
 }
 
 export interface AssaultVerdict {
@@ -120,7 +132,10 @@ export function advanceAssault(state: AssaultState, obs: AssaultObservation): As
   if (state.phase === 'done') return { phase: 'done', complete: true };
   const attackersAlive = state.attackers.length;
   const squadFielded = attackersAlive + state.healers.length;
-  if (obs.threatCleared && state.phase === 'engage') return { phase: 'done', complete: true };
+  // 围攻完成(M7-8):带拆墙手的任务要连敌建筑一起拆完才算成——只清武装
+  // 就撤等于给蹲守者留了重建的壳。
+  if (obs.threatCleared && state.phase === 'engage'
+    && (state.plan.dismantlers === 0 || obs.structuresCleared)) return { phase: 'done', complete: true };
   // 撤退判据只在开拔后(travel/engage)生效:集结期队伍天然不满编,
   // "折半/折损"是战场状态,不是集合状态(§不让整队无限等待——集合期
   // 的超时由 .game 层集结时限另行把门)。
@@ -135,6 +150,7 @@ export function advanceAssault(state: AssaultState, obs: AssaultObservation): As
     }
   }
   if (state.phase === 'muster' && attackersAlive >= state.plan.attackers && state.healers.length >= state.plan.healers
+    && state.dismantlers.length >= state.plan.dismantlers
     && obs.squadBoostResolved) {
     return { phase: 'travel', complete: false };
   }
@@ -149,6 +165,7 @@ export interface AssaultSpawnNeedArgs {
   intel: IntelMemory;
   aliveAttackers: number;
   aliveHealers: number;
+  aliveDismantlers: number;
   workers: number;
   capacity: number;
   energyAvailable: number;
@@ -156,7 +173,7 @@ export interface AssaultSpawnNeedArgs {
 }
 
 export interface AssaultSpawnNeed {
-  role: 'assaulter' | 'medic';
+  role: 'assaulter' | 'medic' | 'dismantler';
   target: string;
   bodyCost: number;
   /** 立队时的编成(仅首具返回;补员时在飞小队已有编成)。 */
@@ -179,7 +196,7 @@ export function assaultSpawnNeed(args: AssaultSpawnNeedArgs): AssaultSpawnNeed |
     const target = evaluateAssaultTargets({ rooms: args.intel.rooms, distances: args.intel.distances ?? {}, now: args.now })[0];
     if (!target) return null;
     if (args.capacity < ASSAULTER_BODY_COST || args.energyAvailable < ASSAULTER_BODY_COST) return null;
-    const plan = planAssaultSquad(target.armed);
+    const plan = planAssaultSquad(target.armed, target.structures);
     return { role: 'assaulter', target: target.name, bodyCost: ASSAULTER_BODY_COST, plan };
   }
   const target = state.target;
@@ -190,6 +207,11 @@ export function assaultSpawnNeed(args: AssaultSpawnNeedArgs): AssaultSpawnNeed |
   if (args.aliveHealers < state.plan.healers) {
     if (args.capacity < SUPPORT_BODY_COST || args.energyAvailable < SUPPORT_BODY_COST) return null;
     return { role: 'medic', target, bodyCost: SUPPORT_BODY_COST };
+  }
+  // 拆墙手垫后(M7-8):它是任务目标但无战力——攻击/医疗齐了才轮到。
+  if (args.aliveDismantlers < state.plan.dismantlers) {
+    if (args.capacity < DISMANTLER_BODY_COST || args.energyAvailable < DISMANTLER_BODY_COST) return null;
+    return { role: 'dismantler', target, bodyCost: DISMANTLER_BODY_COST };
   }
   return null;
 }

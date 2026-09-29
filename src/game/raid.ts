@@ -26,11 +26,14 @@ declare global {
 export function driveAssault(allies: readonly string[], cpuLimit: number): void {
   const intel = intelState();
   const state = intel.assault;
-  const members = Object.values(Game.creeps).filter((c) => (c.memory.role === 'assaulter' || c.memory.role === 'medic') && !c.spawning);
+  const members = Object.values(Game.creeps).filter((c) => (c.memory.role === 'assaulter' || c.memory.role === 'medic' || c.memory.role === 'dismantler') && !c.spawning);
 
   if (state) {
     // 折损同步:在册但已不在场 → 记折损一次(名单即台账)。
-    for (const list of ['attackers', 'healers'] as const) {
+    // 老存档迁移(M7-8 前无拆墙手字段):缺省补空,台账语义不变。
+    state.dismantlers ??= [];
+    state.plan.dismantlers ??= 0;
+    for (const list of ['attackers', 'healers', 'dismantlers'] as const) {
       const before = state[list].length;
       state[list] = state[list].filter((name) => Object.values(Game.creeps).some((c) => c.name === name));
       state.losses += before - state[list].length;
@@ -67,13 +70,14 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
     // M7-7 开拔闸:满编只是人数到齐——全员"强化已了结"(已强化/已放弃/
     // 本无化合物)才翻 travel,否则编成一满强化腿就被名单数跳过(探针实证:
     // 能量靠 sink 腿现送时 3 攻 0 强化开拔)。孵化中的成员按未了结计。
-    const squadBoostResolved = [...state.attackers, ...state.healers].every((name) => {
+    const squadBoostResolved = [...state.attackers, ...state.healers, ...state.dismantlers].every((name) => {
       const creep = Game.creeps[name];
       return creep !== undefined && (creep.memory.boostSkipped === true || squadBoostLeg(creep) === null);
     });
     const verdict = advanceAssault(
-      { phase: state.phase, target: state.target, plan: state.plan, attackers: state.attackers, healers: state.healers, losses: state.losses },
-      { threatCleared, squadInRoom, squadBoostResolved },
+      { phase: state.phase, target: state.target, plan: state.plan, attackers: state.attackers, healers: state.healers, dismantlers: state.dismantlers, losses: state.losses },
+      { threatCleared, squadInRoom, squadBoostResolved,
+        structuresCleared: targetRoom !== undefined && targetRoom.threat.structures === 0 },
     );
     if (verdict.complete) {
       disband(intel, members, true);
@@ -175,6 +179,28 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       if (foe) {
         if (creep.attack(foe) === ERR_NOT_IN_RANGE) creep.moveTo(foe);
       }
+    } else if (mem.role === 'dismantler') {
+      // 拆墙手(M7-8):无战力——武装在场退到朝母房的门格候场(不贴火力区);
+      // 武装清零后按战术序贴拆(spawn 优先,其次 id 序确定性)。rampart 压在
+      // 目标格上由引擎 dismantle 重定向先啃(dist/processor/intents/creeps/
+      // dismantle.js:33-36 实证),拆除还按 DISMANTLE_COST 回吐能量。
+      const armedNow = intel.rooms[target]?.threat.armed ?? 0;
+      if (armedNow > 0 && mem.home) {
+        try {
+          const tile = exitTileOf(target, mem.home);
+          if (!creep.pos.isNearTo(tile)) creep.moveTo(tile, { reusePath: 10 });
+        } catch {
+          markUnreachable(intel, target, Game.time);
+          dropFromRoster(intel, creep.name);
+          creep.suicide();
+        }
+        continue;
+      }
+      const structure = creep.room.find(FIND_HOSTILE_STRUCTURES)
+        .filter((s) => !allies.includes(s.owner?.username ?? '') && s.structureType !== STRUCTURE_CONTROLLER)
+        .sort((a, b) => (a.structureType === STRUCTURE_SPAWN ? 0 : 1) - (b.structureType === STRUCTURE_SPAWN ? 0 : 1)
+          || a.id.localeCompare(b.id))[0];
+      if (structure && creep.dismantle(structure) === ERR_NOT_IN_RANGE) creep.moveTo(structure.pos);
     } else {
       const wounded = creep.room.find(FIND_MY_CREEPS)
         .filter((c) => c.hits < c.hitsMax)
@@ -191,7 +217,8 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
 
   // 撤退收尾:名单清空才落冷却与台账(撤退途中不再立新队——assaultSpawnNeed
   // 对 withdraw 阶段返回 null)。
-  if (intel.assault && intel.assault.phase === 'withdraw' && intel.assault.attackers.length === 0 && intel.assault.healers.length === 0) {
+  if (intel.assault && intel.assault.phase === 'withdraw' && intel.assault.attackers.length === 0
+    && intel.assault.healers.length === 0 && intel.assault.dismantlers.length === 0) {
     finalizeAssault(intel);
   }
 
@@ -226,6 +253,7 @@ function dropFromRoster(intel: IntelMemory, name: string): void {
   if (!state) return;
   state.attackers = state.attackers.filter((n) => n !== name);
   state.healers = state.healers.filter((n) => n !== name);
+  state.dismantlers = state.dismantlers.filter((n) => n !== name);
 }
 
 /** 母房朝目标房一侧的集结格:边界内缩 2 格(绝不抵住传送门格——探针实证:

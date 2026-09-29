@@ -99,6 +99,9 @@ export function observeRoom(room: Room, allies: readonly string[]): RoomIntel {
   const towers = room.find(FIND_HOSTILE_STRUCTURES).filter(s =>
     s.structureType === STRUCTURE_TOWER && !allies.includes(s.owner?.username ?? '')).length;
   const keeperLairs = room.find(FIND_STRUCTURES).filter(s => s.structureType === STRUCTURE_KEEPER_LAIR).length;
+  // 围攻拆除目标池(M7-8):控制器不可拆,排除;盟友建筑不算敌产。
+  const structures = room.find(FIND_HOSTILE_STRUCTURES).filter(s =>
+    s.structureType !== STRUCTURE_CONTROLLER && !allies.includes(s.owner?.username ?? '')).length;
   const controller = room.controller;
   const mineral = room.find(FIND_MINERALS)[0];
   return observe({
@@ -115,6 +118,7 @@ export function observeRoom(room: Room, allies: readonly string[]): RoomIntel {
     hostiles: hostiles.map(c => ({ armed: armedParts.reduce((sum, part) => sum + c.getActiveBodyparts(part), 0) })),
     towers,
     keeperLairs,
+    structures,
     mineral: mineral?.mineralType,
   });
 }

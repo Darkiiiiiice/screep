@@ -38,6 +38,8 @@ describe('combat boost demand (M7-7)', () => {
 
   it('empty plan yields empty demand', () => {
     expect(combatBoostDemand({ attackers: 0, healers: 0 })).toEqual({});
+    // M7-8:拆墙手 ZH 需求(4 work × 30)
+    expect(combatBoostDemand({ attackers: 3, healers: 2, dismantlers: 1 })).toEqual({ UH: 9 * BOOST_MINERAL_PER_PART, ZH: 4 * BOOST_MINERAL_PER_PART });
   });
 });
 

@@ -5,7 +5,7 @@ import type { RoomIntel } from '../../src/domain/intel';
 const room = (over: Partial<RoomIntel>): RoomIntel => ({
   observedAt: 1000,
   sources: [{ id: 's1', x: 20, y: 20 }, { id: 's2', x: 30, y: 30 }],
-  threat: { armed: 0, towers: 0, hostiles: [], keeperLairs: 0 },
+  threat: { armed: 0, towers: 0, hostiles: [], keeperLairs: 0, structures: 0 },
   controller: { level: 0, reserver: 'npc', reservationTicks: 2000 },
   ...over,
 } as RoomIntel);
@@ -33,7 +33,7 @@ describe('raid target board (M7-3)', () => {
       rooms: {
         own: room({ controller: { level: 1, owner: 'npc', reserver: undefined, reservationTicks: undefined } }),
         mine: room({ controller: { level: 0, reserver: 'me', reservationTicks: 2000 } }),
-        war: room({ threat: { armed: 3, towers: 0, hostiles: 1, keeperLairs: 0 } }),
+        war: room({ threat: { armed: 3, towers: 0, hostiles: 1, keeperLairs: 0, structures: 0 } }),
         far: room({}),
         empty: room({ sources: [] }),
       },

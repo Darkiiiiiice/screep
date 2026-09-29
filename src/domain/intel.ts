@@ -12,7 +12,12 @@
 
 export interface SourceIntel { id: string; x: number; y: number }
 export interface ControllerIntel { level: number; owner?: string | undefined; reserver?: string | undefined; reservationTicks?: number | undefined; upgradeBlockedTicks?: number | undefined }
-export interface ThreatIntel { hostiles: number; armed: number; towers: number; keeperLairs: number }
+export interface ThreatIntel {
+  hostiles: number; armed: number; towers: number; keeperLairs: number;
+  /** 敌建筑数(不含控制器,M7-8):围攻拆除目标池——spawn/rampart/塔等,
+   * 观测时按 FIND_HOSTILE_STRUCTURES 全量计(塔房另有 towers 闸排除)。 */
+  structures: number;
+}
 export interface RoomIntel {
   observedAt: number;
   sources: SourceIntel[];
@@ -61,9 +66,10 @@ export interface IntelMemory {
  assault?: {
    target: string;
    phase: 'muster' | 'travel' | 'engage' | 'withdraw';
-   plan: { attackers: number; healers: number };
+   plan: { attackers: number; healers: number; dismantlers: number };
    attackers: string[];
    healers: string[];
+   dismantlers: string[];
    losses: number;
    startedAt: number;
    /** 交战期间曾目击武装敌(完成判据的门,防敌人消失窗口假完成)。 */
@@ -169,6 +175,7 @@ export interface RoomSnapshot {
   hostiles: { armed: number }[];
   towers: number;
   keeperLairs: number;
+  structures: number;
   mineral?: string | undefined;
 }
 export function observe(snap: RoomSnapshot): RoomIntel {
@@ -180,6 +187,7 @@ export function observe(snap: RoomSnapshot): RoomIntel {
       armed: snap.hostiles.reduce((sum, h) => sum + h.armed, 0),
       towers: snap.towers,
       keeperLairs: snap.keeperLairs,
+      structures: snap.structures,
     },
   };
   if (snap.controller) intel.controller = { ...snap.controller };

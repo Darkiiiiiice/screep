@@ -43,6 +43,7 @@ const factoryProbe = args.includes('--factory-probe');
 const squadProbe = args.includes('--squad-probe');
 const raidProbe = args.includes('--raid-probe');
 const assaultProbe = args.includes('--assault-probe');
+const siegeProbe = args.includes('--siege-probe');
 const mineralProbe = args.includes('--mineral-probe');
 const linkplaceProbe = args.includes('--linkplace-probe');
 assert(!linkplaceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--linkplace-probe requires --lifecycle --logistics');
@@ -53,6 +54,7 @@ assert(!factoryProbe || labsProbe, '--factory-probe requires --labs-probe (facto
 assert(!squadProbe || combatProbe, '--squad-probe requires --combat-probe (squad rides the combat fixture)');
 assert(!raidProbe || marketProbe, '--raid-probe requires --market-probe (raid rides the market fixture with its W0N2 + npc user)');
 assert(!assaultProbe || lifecycle && logistics, '--assault-probe requires --lifecycle --logistics');
+assert(!siegeProbe || assaultProbe, '--siege-probe requires --assault-probe (siege rides the assault fixture)');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -75,9 +77,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, siegeProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, siegeProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -487,10 +489,24 @@ try {
       logisticsEnabled: true,
       assaultEnabled: true,
       intel: { schema: 1,
-        rooms: { W0N2: { observedAt: 0, sources: fixture.sources.map(([x, y], i) => ({ id: `s${i}`, x, y })), threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0 }, controller: { level: 0 } } },
+        rooms: { W0N2: { observedAt: 0, sources: fixture.sources.map(([x, y], i) => ({ id: `s${i}`, x, y })), threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0, structures: siegeProbe ? 3 : 0 }, controller: { level: 0 } } },
         distances: { W0N2: 1 },
       },
     }));
+    if (siegeProbe) {
+      // M7-8 围攻:W0N2 摆敌建筑群——spawn(5000)+压顶 rampart(9000)+extension
+      // (1000),共 15000 hits ≈ 200/tick 裸拆 75t。rampart 种子给足:自然衰减
+      // 3/tick(RAMPART_DECAY 300/100t)到窗口末(3000)恰归零——断言"早于 2500
+      // 消失"即可排除自然衰减假绿。敌属主与蹲守者同('2')。
+      await server.world.addRoomObject('W0N2', 'spawn', 30, 30, {
+        user: '2', name: 'SiegeSpawn', store: { energy: 300 }, storeCapacityResource: { energy: 300 }, hits: 5000, hitsMax: 5000,
+      });
+      await server.world.addRoomObject('W0N2', 'rampart', 30, 30, { user: '2', hits: 9000, hitsMax: 9000 });
+      await server.world.addRoomObject('W0N2', 'extension', 28, 32, {
+        user: '2', store: {}, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000,
+      });
+      report.siege = { spawnGoneAt: null, rampartGoneAt: null, extGoneAt: null };
+    }
     report.assault = { target: 'W0N2', squatters: ['Squatter-1', 'Squatter-2'], minHits: 2000, clearedAt: null, phases: {}, uhPeak: 0, uhBoosted: 0, inputLabEnergyPeak: 0, inputLabIds: assaultInputLabIds };
   }
   if (progressionProbe) {
@@ -771,6 +787,13 @@ try {
         }
       }
       report.assault.uhBoosted = Math.max(report.assault.uhBoosted, boosted);
+      if (siegeProbe) {
+        const hostileStructs = (await server.world.roomObjects('W0N2')).filter(o => o.user === '2' && o.type !== 'creep');
+        const left = new Set(hostileStructs.map(o => o.type));
+        if (!left.has('spawn')) report.siege.spawnGoneAt ??= i;
+        if (!left.has('rampart')) report.siege.rampartGoneAt ??= i;
+        if (!left.has('extension')) report.siege.extGoneAt ??= i;
+      }
     }
     if (combatProbe && i === 850 && !squadProbe) {
       for (const [name, x] of [['Raider-2', 33], ['Raider-3', 35]]) {
@@ -1331,6 +1354,16 @@ try {
       check('UH produced by the reaction line', report.assault.uhPeak >= 90);
       check('assaulters boosted with UH before departing', report.assault.uhBoosted >= 1);
       check('input labs never fed energy (sink scoped to demanded compound)', report.assault.inputLabEnergyPeak === 0);
+      if (siegeProbe) {
+        // 围攻(M7-8):任务完成判据含"敌建筑拆完"——spawn/rampart/ext 全灭才收档。
+        check('siege dismantled the hostile spawn', report.siege.spawnGoneAt !== null);
+        check('siege chewed the rampart before decay could explain (<2500)',
+          report.siege.rampartGoneAt !== null && report.siege.rampartGoneAt < 2500);
+        check('siege razed the hostile extension', report.siege.extGoneAt !== null);
+        // 完成时序:建筑清零在任务收档(clearedAt 后仍作战)之前或同窗——
+        // 收档本身由上方"完胜无撤退"钉,这里钉"拆完才收"的因果方向。
+        check('razing preceded mission completion', report.assault.clearedAt !== null);
+      }
       // 歼敌:受击后清场且保持到窗口后段(证据取自 W0N2 直采采样;母房
       // objects 不含邻房,按它断"清场"恒真——空断言已废)。
       check('squatters cleared from the target room after damage',
