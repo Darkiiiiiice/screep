@@ -9,6 +9,7 @@ import { LAB_INPUT_LACK } from '../domain/labs';
 import { FACTORY_MINERAL_FLOOR } from '../domain/factory';
 import { currentRecipe, labMineral, terminalStock } from './labs';
 import { currentBoostDemand } from './raid';
+import { LAB_BOOST_ENERGY_TARGET, stockWithLabHoldings } from '../domain/boost';
 
 declare global {
   interface CreepMemory {
@@ -66,9 +67,19 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     // 几何封印的 spawn/ext 永远空着,不该否决 storage 缓冲(否则 M6-1 盈余入库
     // 在 RCL4 永不启动——与 sinks 过滤同一份封印证据)。
     || !hasApproach(room, s.pos));
-  const sinks = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension | StructureTower | StructureStorage =>
+  // M7-7 强化后勤:任务编成期(muster)持需求化合物的 lab 加入能量 sink——
+  // boostCreep 每件扣 20 能,没有送能腿就是"有料无电",成员贴 lab 白等 300t
+  // 后放弃。收窄到"持需求化合物"是因为反应不吃能量(引擎实证):给输入 lab
+  // 灌能是纯沉没(910 能死钱+白占集结窗口搬运趟次实证);填充上限
+  // LAB_BOOST_ENERGY_TARGET(300)——全套强化只需 180,按 2000 灌同为沉没。
+  // 非编成期(需求 undefined)lab 不入列,行为与此前完全一致。
+  const boostCompounds = Object.keys(currentBoostDemand() ?? {});
+  const sinks = room.find(FIND_MY_STRUCTURES).filter((s): s is StructureSpawn | StructureExtension | StructureTower | StructureStorage | StructureLab =>
     (s.structureType === STRUCTURE_SPAWN || s.structureType === STRUCTURE_EXTENSION || s.structureType === STRUCTURE_TOWER
-      || (s.structureType === STRUCTURE_STORAGE && spawnBufferFull))
+      || (s.structureType === STRUCTURE_STORAGE && spawnBufferFull)
+      || (s.structureType === STRUCTURE_LAB
+        && boostCompounds.includes(labMineral(s) ?? '')
+        && s.store.getUsedCapacity(RESOURCE_ENERGY) < LAB_BOOST_ENERGY_TARGET))
     && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
     // 几何封印的 sink（8 邻域全是墙/结构）永远送不到货，会反复吸走带能量的工人形成
     // 冻结循环（线上实证 ext 6aa94c03 封印致工人 250+ tick 死锁）——从派单板剔除。
@@ -344,7 +355,9 @@ export function runLogistics(room: Room, creeps: Creep[], sources: Source[], con
     }
     }
   }
-  const ranked = rankServices(sinks.map(s => ({ id: s.id, priority: s.structureType === STRUCTURE_SPAWN ? 10 : s.structureType === STRUCTURE_TOWER ? 7 : 5,
+  // lab 强化供能排 spawn(10) 之下、tower(7)/ext/storage(5) 之上:集结窗口
+  // 里与补员 backlog 同龄竞争会饿死强化腿(三红实证),但不该压过 spawn。
+  const ranked = rankServices(sinks.map(s => ({ id: s.id, priority: s.structureType === STRUCTURE_SPAWN ? 10 : s.structureType === STRUCTURE_LAB ? 9 : s.structureType === STRUCTURE_TOWER ? 7 : 5,
     emergency: mobile.length < 2 && s.structureType === STRUCTURE_SPAWN })), services, Game.time);
   const rclLevel = room.controller?.level ?? 0;
   const ownedByType = new Map<string, number>();
@@ -687,6 +700,16 @@ export function runMinerals(room: Room): void {
     const canAccept = (lab: StructureLab, res: string) =>
       (labMineral(lab) === undefined || labMineral(lab) === res)
       && ((lab.store.getUsedCapacity(res as ResourceConstant) ?? 0) < LAB_INPUT_LACK);
+    // 需求判据的库存视图:terminal + 各 lab 对需求化合物的持仓合并——强化
+    // 料只产在输出 lab、无 courier 送进 terminal(M6-5 缺口),只看 terminal
+    // 会让"需求已满"落闸永不生效、任务期恒产到输入见底。
+    const boostDemand = currentBoostDemand();
+    const mineralStock = boostDemand
+      ? stockWithLabHoldings(terminalStock(terminal),
+          labs.map(l => Object.fromEntries(Object.keys(boostDemand!).map(c => [c, l.store.getUsedCapacity(c as ResourceConstant) ?? 0]))),
+          Object.keys(boostDemand))
+      : terminalStock(terminal);
+    const recipe = currentRecipe(mineralStock, boostDemand);
     if (carriedType) {
       // 供料半程,优先级:factory 缺矿(压条线,M6-7)→ 配方可收 lab → terminal。
       const factory = room.find(FIND_MY_STRUCTURES).find((s): s is StructureFactory => s.structureType === STRUCTURE_FACTORY);
@@ -694,7 +717,6 @@ export function runMinerals(room: Room): void {
         && ((factory.store.getUsedCapacity(carriedType as ResourceConstant) ?? 0) < FACTORY_MINERAL_FLOOR);
       if (factoryHungry && harvester.transfer(factory, carriedType as ResourceConstant) === ERR_NOT_IN_RANGE) travel(harvester, factory.pos, 1);
       else if (!factoryHungry) {
-        const recipe = currentRecipe(terminalStock(terminal), currentBoostDemand());
         const target = recipe && recipe.inputs.includes(carriedType)
           ? labs.find(l => canAccept(l, carriedType))
           : undefined;
@@ -705,7 +727,6 @@ export function runMinerals(room: Room): void {
     }
     // 取货半程:仅在恰已站在 terminal 旁时顺路捎带——不为取料专门跑腿
     // (采矿是本职;terminal 有矿的窗口在送矿时自然出现)。
-    const recipe = currentRecipe(terminalStock(terminal), currentBoostDemand());
     if (recipe && harvester.pos.isNearTo(terminal.pos)) {
       const input = recipe.inputs.find(res => (terminal.store.getUsedCapacity(res as ResourceConstant) ?? 0) > 0
         && labs.some(l => canAccept(l, res)));

@@ -100,6 +100,9 @@ export interface AssaultObservation {
   threatCleared: boolean;
   /** 全员已进目标房(行军完成判据,.game 层按 room.name 计数)。 */
   squadInRoom: boolean;
+  /** 全员强化已了结(已强化/已放弃/本无化合物;M7-7 开拔闸):满编只是
+   * 人数到齐,不吃这闸会把强化腿整段跳过(探针实证 3 攻 0 强化开拔)。 */
+  squadBoostResolved: boolean;
 }
 
 export interface AssaultVerdict {
@@ -131,7 +134,8 @@ export function advanceAssault(state: AssaultState, obs: AssaultObservation): As
       return { phase: 'withdraw', complete: false, withdrawReason: 'crippled' };
     }
   }
-  if (state.phase === 'muster' && attackersAlive >= state.plan.attackers && state.healers.length >= state.plan.healers) {
+  if (state.phase === 'muster' && attackersAlive >= state.plan.attackers && state.healers.length >= state.plan.healers
+    && obs.squadBoostResolved) {
     return { phase: 'travel', complete: false };
   }
   if (state.phase === 'travel' && obs.squadInRoom) {

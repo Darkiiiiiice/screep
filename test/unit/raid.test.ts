@@ -72,44 +72,46 @@ describe('assault phase machine (M7-6)', () => {
   });
 
   it('holds at muster until the squad is complete, then travels', () => {
-    expect(advanceAssault(state({ attackers: ['a1'] }), { threatCleared: false, squadInRoom: false }).phase).toBe('muster');
-    expect(advanceAssault(state({ healers: ['h1'] }), { threatCleared: false, squadInRoom: false }).phase).toBe('muster');
-    expect(advanceAssault(state(), { threatCleared: false, squadInRoom: false }).phase).toBe('travel');
+    expect(advanceAssault(state({ attackers: ['a1'] }), { threatCleared: false, squadInRoom: false, squadBoostResolved: true }).phase).toBe('muster');
+    expect(advanceAssault(state({ healers: ['h1'] }), { threatCleared: false, squadInRoom: false, squadBoostResolved: true }).phase).toBe('muster');
+    expect(advanceAssault(state(), { threatCleared: false, squadInRoom: false, squadBoostResolved: true }).phase).toBe('travel');
+    // M7-7:满编但强化未了结 -> 不翻开拔(强化腿不被名单数跳过)
+    expect(advanceAssault(state(), { threatCleared: false, squadInRoom: false, squadBoostResolved: false }).phase).toBe('muster');
   });
 
   it('engages on arrival and completes when threat is cleared', () => {
-    expect(advanceAssault(state({ phase: 'travel' }), { threatCleared: false, squadInRoom: false }).phase).toBe('travel');
-    const engaged = advanceAssault(state({ phase: 'travel' }), { threatCleared: false, squadInRoom: true });
+    expect(advanceAssault(state({ phase: 'travel' }), { threatCleared: false, squadInRoom: false, squadBoostResolved: true }).phase).toBe('travel');
+    const engaged = advanceAssault(state({ phase: 'travel' }), { threatCleared: false, squadInRoom: true, squadBoostResolved: true });
     expect(engaged.phase).toBe('engage');
-    expect(advanceAssault(state({ phase: 'engage' }), { threatCleared: true, squadInRoom: true })).toEqual({ phase: 'done', complete: true });
+    expect(advanceAssault(state({ phase: 'engage' }), { threatCleared: true, squadInRoom: true, squadBoostResolved: true })).toEqual({ phase: 'done', complete: true });
   });
 
   it('withdraws on loss budget breach and on a crippled squad', () => {
-    const losses = advanceAssault(state({ phase: 'engage', losses: 1, attackers: ['a1', 'a2'], healers: ['h1'] }), { threatCleared: false, squadInRoom: true });
+    const losses = advanceAssault(state({ phase: 'engage', losses: 1, attackers: ['a1', 'a2'], healers: ['h1'] }), { threatCleared: false, squadInRoom: true, squadBoostResolved: true });
     expect(losses).toMatchObject({ phase: 'withdraw', withdrawReason: 'losses' });
-    const crippled = advanceAssault(state({ phase: 'engage', losses: 0, attackers: ['a1'], healers: ['h1', 'h2'] }), { threatCleared: false, squadInRoom: true });
+    const crippled = advanceAssault(state({ phase: 'engage', losses: 0, attackers: ['a1'], healers: ['h1', 'h2'] }), { threatCleared: false, squadInRoom: true, squadBoostResolved: true });
     expect(crippled).toMatchObject({ phase: 'withdraw', withdrawReason: 'crippled' });
   });
 
   it('reaches a terminal verdict on total extinction (no in-flight deadlock)', () => {
-    const extinct = advanceAssault(state({ phase: 'engage', losses: 5, attackers: [], healers: [] }), { threatCleared: false, squadInRoom: true });
+    const extinct = advanceAssault(state({ phase: 'engage', losses: 5, attackers: [], healers: [] }), { threatCleared: false, squadInRoom: true, squadBoostResolved: true });
     expect(extinct).toMatchObject({ phase: 'withdraw', withdrawReason: 'losses' });
   });
 
   it('prefers completion over withdrawal once the room is cleared', () => {
-    const cleared = advanceAssault(state({ phase: 'engage', losses: 1, attackers: ['a1', 'a2'], healers: ['h1'] }), { threatCleared: true, squadInRoom: true });
+    const cleared = advanceAssault(state({ phase: 'engage', losses: 1, attackers: ['a1', 'a2'], healers: ['h1'] }), { threatCleared: true, squadInRoom: true, squadBoostResolved: true });
     expect(cleared).toEqual({ phase: 'done', complete: true });
   });
 
   it('keeps fighting with healers gone but attackers intact', () => {
-    const noHealers = advanceAssault(state({ phase: 'engage', healers: [], losses: 2 }), { threatCleared: false, squadInRoom: true });
+    const noHealers = advanceAssault(state({ phase: 'engage', healers: [], losses: 2 }), { threatCleared: false, squadInRoom: true, squadBoostResolved: true });
     // losses 2 已破预算 → 撤;但若只是医疗阵亡(losses 计入)攻击手齐整时由预算判
     expect(['withdraw', 'engage']).toContain(noHealers.phase);
-    const onlyHealersLost = advanceAssault(state({ phase: 'engage', healers: [], losses: 0 }), { threatCleared: false, squadInRoom: true });
+    const onlyHealersLost = advanceAssault(state({ phase: 'engage', healers: [], losses: 0 }), { threatCleared: false, squadInRoom: true, squadBoostResolved: true });
     expect(onlyHealersLost.phase).toBe('engage');
   });
 
   it('is terminal once done', () => {
-    expect(advanceAssault(state({ phase: 'done' }), { threatCleared: false, squadInRoom: false })).toEqual({ phase: 'done', complete: true });
+    expect(advanceAssault(state({ phase: 'done' }), { threatCleared: false, squadInRoom: false, squadBoostResolved: true })).toEqual({ phase: 'done', complete: true });
   });
 });

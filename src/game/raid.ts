@@ -64,9 +64,16 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       state.phase = 'withdraw';
     }
 
+    // M7-7 开拔闸:满编只是人数到齐——全员"强化已了结"(已强化/已放弃/
+    // 本无化合物)才翻 travel,否则编成一满强化腿就被名单数跳过(探针实证:
+    // 能量靠 sink 腿现送时 3 攻 0 强化开拔)。孵化中的成员按未了结计。
+    const squadBoostResolved = [...state.attackers, ...state.healers].every((name) => {
+      const creep = Game.creeps[name];
+      return creep !== undefined && (creep.memory.boostSkipped === true || squadBoostLeg(creep) === null);
+    });
     const verdict = advanceAssault(
       { phase: state.phase, target: state.target, plan: state.plan, attackers: state.attackers, healers: state.healers, losses: state.losses },
-      { threatCleared, squadInRoom },
+      { threatCleared, squadInRoom, squadBoostResolved },
     );
     if (verdict.complete) {
       disband(intel, members, true);
@@ -105,7 +112,9 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       // 挤过边界后原地挨打到死)。寻路抛错按不可达退役。
       if (!mem.home) { dropFromRoster(intel, creep.name); creep.suicide(); continue; }
       // M7-7 强化腿:编成期先到强化 lab 领料再开拔。强化是增益不是前提:
-      // 无料/超时(BOOST_WAIT_LIMIT ≪ 集结超时)即放弃开拔,不拖任务后腿。
+      // 超时(BOOST_WAIT_LIMIT ≪ 集结超时)或本房无 lab 即放弃开拔,不拖任务后腿;
+      // 料暂时清零(部分强化后引擎把 storeCapacityResource 置空)不判死——反应
+      // 涓流会补,贴着等到 deadline。
       if (!mem.boostSkipped) {
         const leg = squadBoostLeg(creep);
         if (!leg) { mem.boostSkipped = true; }
@@ -116,11 +125,12 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
             const has = (l: StructureLab): boolean =>
               (l.store.getUsedCapacity(leg.compound as ResourceConstant) ?? 0) >= BOOST_MINERAL_PER_PART
               && (l.store.getUsedCapacity(RESOURCE_ENERGY) ?? 0) >= BOOST_ENERGY_PER_PART;
-            const labs = creep.room.find(FIND_MY_STRUCTURES)
-              .filter((s): s is StructureLab => s.structureType === STRUCTURE_LAB)
-              .filter((l) => labMineral(l) === leg.compound);
+            const roomLabs = creep.room.find(FIND_MY_STRUCTURES)
+              .filter((s): s is StructureLab => s.structureType === STRUCTURE_LAB);
+            if (roomLabs.length === 0) { mem.boostSkipped = true; continue; }
+            const labs = roomLabs.filter((l) => labMineral(l) === leg.compound);
             const lab = labs.find(has) ?? labs[0];
-            if (!lab) { mem.boostSkipped = true; }
+            if (!lab) continue;
             else if (!creep.pos.isNearTo(lab.pos)) {
               try { creep.moveTo(lab.pos, { reusePath: 10 }); } catch {
                 markUnreachable(intel, creep.room.name, Game.time);

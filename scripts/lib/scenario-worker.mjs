@@ -452,7 +452,10 @@ try {
     const boostLabs = (await db['rooms.objects'].find({ type: 'lab', room: fixture.room })).sort((a, b) => String(a._id).localeCompare(String(b._id)));
     await db['rooms.objects'].update({ _id: boostLabs[0]._id }, { $set: { store: { H: 1000 }, storeCapacityResource: { energy: 2000, H: 3000 } } });
     await db['rooms.objects'].update({ _id: boostLabs[1]._id }, { $set: { store: { U: 1000 }, storeCapacityResource: { energy: 2000, U: 3000 } } });
-    await db['rooms.objects'].update({ _id: boostLabs[2]._id }, { $set: { store: { energy: 1000 }, storeCapacityResource: { energy: 2000, UH: 3000 } } });
+    // 输出 lab 不预置能量:强化供能全靠 M7-7 sink 腿(muster 期 lab 入能量
+    // sink)现送——预置满能会把"有料无电"缺口整个掩盖(评审实证)。
+    await db['rooms.objects'].update({ _id: boostLabs[2]._id }, { $set: { storeCapacityResource: { energy: 2000, UH: 3000 } } });
+    var assaultInputLabIds = [String(boostLabs[0]._id), String(boostLabs[1]._id)];
     // RCL6 满编 20 扩展满能(缓冲 2300):小队 390/600 串行孵化跨 ~1500t,
     // 缓冲不足会让第 2 医疗 600 永远等不齐(集结超时假撤)。
     for (const [x, y] of [[20, 25], [30, 25], [25, 19], [19, 25], [31, 25], [20, 20], [28, 28], [21, 27], [27, 20], [29, 24], [18, 18], [22, 17], [28, 17], [32, 18], [17, 22], [33, 22], [17, 28], [33, 28], [22, 32], [28, 32]]) {
@@ -488,7 +491,7 @@ try {
         distances: { W0N2: 1 },
       },
     }));
-    report.assault = { target: 'W0N2', squatters: ['Squatter-1', 'Squatter-2'], minHits: 2000, clearedAt: null, phases: {}, uhPeak: 0, uhBoosted: 0 };
+    report.assault = { target: 'W0N2', squatters: ['Squatter-1', 'Squatter-2'], minHits: 2000, clearedAt: null, phases: {}, uhPeak: 0, uhBoosted: 0, inputLabEnergyPeak: 0, inputLabIds: assaultInputLabIds };
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -760,6 +763,11 @@ try {
           boosted = Math.max(boosted, o.body.filter(p => p.boost === 'UH').length);
         } else if (o.type === 'lab' && o.store && (o.store.UH ?? 0) > 0) {
           report.assault.uhPeak = Math.max(report.assault.uhPeak, o.store.UH);
+        } else if (o.type === 'lab' && o.store && report.assault.inputLabIds.includes(String(o._id))) {
+          // sink 收窄钉(按夹具 id 认输入 lab——输出 lab 被吃到 UH=0 时不能
+          // 误当输入):反应不吃能量,输入 lab 一粒能都不该收到(收窄前 910 能
+          // 永久沉没实证)。
+          report.assault.inputLabEnergyPeak = Math.max(report.assault.inputLabEnergyPeak, o.store.energy ?? 0);
         }
       }
       report.assault.uhBoosted = Math.max(report.assault.uhBoosted, boosted);
@@ -1322,6 +1330,7 @@ try {
       // 攻击手身体曾见 UH 强化件(boostCreep 通,强化腿真实执行)。
       check('UH produced by the reaction line', report.assault.uhPeak >= 90);
       check('assaulters boosted with UH before departing', report.assault.uhBoosted >= 1);
+      check('input labs never fed energy (sink scoped to demanded compound)', report.assault.inputLabEnergyPeak === 0);
       // 歼敌:受击后清场且保持到窗口后段(证据取自 W0N2 直采采样;母房
       // objects 不含邻房,按它断"清场"恒真——空断言已废)。
       check('squatters cleared from the target room after damage',
