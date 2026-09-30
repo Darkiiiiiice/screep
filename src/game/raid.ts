@@ -223,7 +223,7 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       if (mem.role === 'medic') {
         // 医疗先归位再行医——只治不走会把小队永远拖在 travel(实证:医疗
         // 流落场外,squadAssembled 永不成立,全队站桩到 TTL 耗尽)。
-        healWounded(creep);
+        healWounded(creep, allies);
         continue;
       }
       const stager = creep.room.find(FIND_HOSTILE_CREEPS)
@@ -242,9 +242,12 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
     }
     // 交战/在目标房:攻击手扑咬最近武装敌,医疗治疗最重伤我方。
     if (mem.role === 'assaulter') {
+      // 焦点最弱(评审实证):各咬最近会把火力摊在双敌上,输出期被入侵 AI
+      // 的焦点火反杀(240dps 集火 3-4t 杀一名攻击手);hits 升序+名字决胜
+      // 让全队收敛同一目标,先杀先减对面 DPS。
       const foe = creep.room.find(FIND_HOSTILE_CREEPS)
         .filter((h) => !allies.includes(h.owner.username))
-        .sort((a, b) => a.pos.getRangeTo(creep) - b.pos.getRangeTo(creep))[0];
+        .sort((a, b) => a.hits - b.hits || a.name.localeCompare(b.name))[0];
       if (foe) {
         if (creep.attack(foe) === ERR_NOT_IN_RANGE) creep.moveTo(foe);
       }
@@ -253,9 +256,10 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       // 近战压到 3 环(满射程缘)就边射边撤——等速追击下环带恒 3,追兵永远
       // 贴不上(实证:d<3 才撤的均衡是 d=1 恒贴脸,25 tick 连咬)。
       // 对远程/无近战敌对射不亏(同 10/件),不枉风。
+      // 目标与攻击手同序(焦点最弱),不另起最近序分散火力。
       const foe = creep.room.find(FIND_HOSTILE_CREEPS)
         .filter((h) => !allies.includes(h.owner.username))
-        .sort((a, b) => a.pos.getRangeTo(creep) - b.pos.getRangeTo(creep))[0];
+        .sort((a, b) => a.hits - b.hits || a.name.localeCompare(b.name))[0];
       if (foe) {
         const d = creep.pos.getRangeTo(foe);
         if (d > 3) creep.moveTo(foe, { range: 3 });
@@ -288,7 +292,7 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
           || a.id.localeCompare(b.id))[0];
       if (structure && creep.dismantle(structure) === ERR_NOT_IN_RANGE) creep.moveTo(structure.pos);
     } else {
-      healWounded(creep);
+      healWounded(creep, allies);
     }
   }
 
@@ -313,7 +317,7 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
  * 挨了一刀 30),不死于侧移。全堵也交直线意图(交通仲裁下 tick 可能挪开)。 */
 function kiteRetreatStep(creep: Creep, from: RoomPosition): void {
   const dir = from.getDirectionTo(creep.pos);
-  const order = [dir, ((dir + 6) % 8) + 1, (dir % 8) + 1, ((dir + 5) % 8) + 1, ((dir + 3) % 8) + 1];
+  const order = [dir, ((dir + 6) % 8) + 1, (dir % 8) + 1, ((dir + 5) % 8) + 1, ((dir + 1) % 8) + 1];  // away,±45°,±90°(评审修订:原第 5 项 ((dir+3)%8)+1 是 180° 朝敌)
   const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
   const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
   const terrain = Game.map.getRoomTerrain(creep.room.name);
@@ -321,7 +325,7 @@ function kiteRetreatStep(creep: Creep, from: RoomPosition): void {
   for (const d of order) {
     const nx = creep.pos.x + (dx[d] ?? 0);
     const ny = creep.pos.y + (dy[d] ?? 0);
-    if (nx < 1 || nx > 48 || ny < 1 || ny > 48) continue;
+    if (nx < 0 || nx > 49 || ny < 0 || ny > 49) continue;  // 0/49 是合法贴边格(评审修订:底边恰是风筝风暴眼)
     if (terrain.get(nx, ny) === TERRAIN_MASK_WALL) continue;
     if (occupied.has(nx * 50 + ny)) continue;
     creep.move(d as DirectionConstant);
@@ -331,16 +335,26 @@ function kiteRetreatStep(creep: Creep, from: RoomPosition): void {
 }
 
 /** 医疗共性腿:治疗本房最重伤我方(邻接 heal,否则 rangedHeal+贴近)。 */
-function healWounded(creep: Creep): void {
+function healWounded(creep: Creep, allies: readonly string[]): void {
   const wounded = creep.room.find(FIND_MY_CREEPS)
     .filter((c) => c.hits < c.hitsMax)
     .sort((a, b) => a.hits / a.hitsMax - b.hits / b.hitsMax)[0];
+  // 火线医疗(评审两轮实证):站打 3 环 rangedHeal 疗效 4/件,喂不住被
+  // 集火的前排(60dps 焦点 vs 16hps = 前排 23t 阵亡)——贴脸 12/件(双医疗
+  // 48hps)才能淹没了了 60dps。但 medic 自己贴敌(1 环)会被 swap 集火,
+  // 此时边治边退;敌在 2 环够不着近战,是安全位,照常贴伤员满疗。
   if (wounded) {
     if (creep.pos.isNearTo(wounded)) creep.heal(wounded);
-    else {
-      creep.rangedHeal(wounded);
-      creep.moveTo(wounded);
-    }
+    else if (creep.pos.getRangeTo(wounded) <= 3) creep.rangedHeal(wounded);
+  }
+  const threat = creep.room.find(FIND_HOSTILE_CREEPS)
+    .filter((h) => !allies.includes(h.owner.username)
+      && h.body.some((p) => p.type === ATTACK && p.hits > 0))
+    .sort((a, b) => a.pos.getRangeTo(creep) - b.pos.getRangeTo(creep))[0];
+  if (threat && creep.pos.isNearTo(threat)) {
+    kiteRetreatStep(creep, threat.pos);
+  } else if (wounded && !creep.pos.isNearTo(wounded)) {
+    creep.moveTo(wounded);
   }
 }
 

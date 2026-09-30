@@ -755,37 +755,50 @@ try {
       for (const [name, x] of [['Squatter-1', 24], ['Squatter-2', 26]]) {
         if (!objs.some(o => o.type === 'creep' && o.name === name)) {
           await server.world.addRoomObject('W0N2', 'creep', x, 34, {
+            // 部件序实证(评审):引擎按尾填 hits 预算(creeps/tick.js _recalc-body),
+            // attack 列首+2000<2200 容量=出生即缴械(haveAttack 恒假,追击/攻击
+            // 全不触发)。attack 列尾活到 ~200 血,追击全程真实。
             user: '2', name, body: [
-              ...Array.from({ length: 2 }, () => ({ type: 'attack', hits: 100 })),
-              ...Array.from({ length: 20 }, () => ({ type: 'move', hits: 100 })),
+              ...Array.from({ length: 19 }, () => ({ type: 'move', hits: 100 })),
+              { type: 'attack', hits: 100 },
             ],
             hits: 2000, hitsMax: 2000, store: {}, storeCapacity: 0, fatigue: 0, spawning: false, ageTime: 4000, actionLog: {},
           });
         }
       }
-      if (i === 0) console.log('[assault] squatters seeded in W0N2 (2x 2000hp, 20dps)');
+      if (i === 0) console.log('[assault] squatters seeded in W0N2 (2x 2000hp, 30dps each, attack tail-seeded)');
     }
     // 专职追兵(M7-9 评审修订):蹲守者 attack 部件列首,交火瞬间被剥光,
     // 原生冲锋压不出风筝窗口——补一只 attack 列尾的高血追击者,由引擎
     // invasion AI 真实驱动(findAttack 咬路径最近敌对者:生成在游骑东侧 4 格
     // 即锁定游骑),交火期逐 tick 实测与游骑的环带距离。
-    if (kiteProbe && !report.kite.chaserSpawned && report.assault.phases.engage !== undefined) {
+    // 入场时机(评审修订):改在蹲守者清场后——交战期入场会让游骑被
+    // 蹲守者+追兵双向夹击,环带被口袋几何打破(实证 bandMin 摆 1/3);
+    // 清场后单轴追击才是风筝机制要证的孤立法,且追兵在场 armed>0
+    // 天然卡住任务完成判据(25t 窗口足够测环带)。
+    if (kiteProbe && !report.kite.chaserSpawned && report.assault.clearedAt !== null && report.assault.clearedAt !== undefined) {
       const objs = await server.world.roomObjects('W0N2');
       const ranger = objs.find(o => o.type === 'creep' && String(o.name).startsWith('ranger-'));
       if (ranger) {
-        await server.world.addRoomObject('W0N2', 'creep', Math.min(47, ranger.x + 4), ranger.y, {
+        // 12-tick 轻追兵:3 格处生成即入环(contact 结构性成立),环带实测
+        // 靠随后几 tick 的撤退步;30dps×12t=360<400 任何人血量——测量装置
+        // 不得杀伤被测小队(实证:5000hp 版把 medic 磨死触发撤退,任务红
+        // 是探针自伤)。1000hp 让小队集火 ~2t 可解,兜底 +12t 移除。
+        await server.world.addRoomObject('W0N2', 'creep', Math.min(47, ranger.x + 3), ranger.y, {
           user: '2', name: 'Chaser-1', body: [
-            ...Array.from({ length: 49 }, () => ({ type: 'move', hits: 100 })),
+            ...Array.from({ length: 9 }, () => ({ type: 'move', hits: 100 })),
             { type: 'attack', hits: 100 },
           ],
-          hits: 5000, hitsMax: 5000, store: {}, storeCapacity: 0, fatigue: 0, spawning: false, ageTime: 4000, actionLog: {},
+          hits: 1000, hitsMax: 1000, store: {}, storeCapacity: 0, fatigue: 0, spawning: false, ageTime: 4000, actionLog: {},
         });
         report.kite.chaserSpawned = i;
-        console.log('[kite] chaser seeded at', Math.min(47, ranger.x + 4), ranger.y);
+        console.log('[kite] chaser seeded at', Math.min(47, ranger.x + 3), ranger.y);
       }
     }
-    if (kiteProbe && report.kite.chaserSpawned && i === report.kite.chaserSpawned + 30) {
-      // 兜底清场:追兵是武装敌对者,赖着不走会卡住任务完成判据。
+    if (kiteProbe && report.kite.chaserSpawned
+      && (i >= report.kite.chaserSpawned + 12 || report.assault.phases.withdraw !== undefined)) {
+      // 测量窗 12t 到点(或任务提前撤退)即移除——追兵是武装敌对者,
+      // 赖着不走会卡住任务完成判据,更不能让它磨死任何人。
       await db['rooms.objects'].removeWhere({ type: 'creep', name: 'Chaser-1' });
     }
     if (kiteProbe && (report.assault.minHits < 2000 || report.kite.chaserSpawned) && !report.kite.bandDone) {
@@ -793,8 +806,9 @@ try {
       // chebyshev 从未 <2 才算风筝成立)。
       const objs = await server.world.roomObjects('W0N2');
       const rangers = objs.filter(o => o.type === 'creep' && String(o.name).startsWith('ranger-'));
-      const meleeFoes = objs.filter(o => o.type === 'creep'
-        && (report.assault.squatters.includes(o.name) || o.name === 'Chaser-1')
+      // 环带只对专职追兵计:蹲守者混战期是双向火网,不是风筝要证的
+      // 单轴追击实验;清场后追兵单压,环带数据才干净。
+      const meleeFoes = objs.filter(o => o.type === 'creep' && o.name === 'Chaser-1'
         && (o.body || []).some(p => p.type === 'attack' && p.hits > 0));
       for (const r of rangers) {
         for (const f of meleeFoes) {
@@ -869,7 +883,7 @@ try {
           report.kite.rangerMinHits = Math.min(report.kite.rangerMinHits ?? Infinity, o.hits ?? 0);
         }
       }
-      if (siegeProbe) {
+      if (siegeProbe || stalemateProbe) {
         const hostileStructs = (await server.world.roomObjects('W0N2')).filter(o => o.user === '2' && o.type !== 'creep');
         const left = new Set(hostileStructs.map(o => o.type));
         if (!left.has('spawn')) report.siege.spawnGoneAt ??= i;
@@ -1451,9 +1465,12 @@ try {
         // 烂尾围攻(M7-8b 评审修订):spawn 3e8 拆不完——可拆的墙/扩展照拆
         // (拆墙腿真实工作过),任务以撤退收档,目标入排除期,且不再二次立队
         // (排除表断"撤退→冷却→再锁"送兵循环的端到端证据)。
-        // 战术序 spawn 优先(正确教义:先掐产能)——拆墙手会死磕 3e8 的
-        // spawn 直到撤退,墙/扩展本就在它身后;场景的学习目标是撤退+排除
-        // +不再立队,不断"先拆软目标"(那是 spawn-first 教义的反面)。
+        // 战术序 spawn 优先(正确教义:先掐产能)——拆墙手死磕 3e8 spawn,
+        // 压顶 rampart 被同格重定向先啃(~45t 告破 = 拆墙腿真实工作过,非自然
+        // 衰减 ~3000t);ext 永远轮不到是教义结果非 bug。场景学习目标=撤退+
+        // 排除+不再立队。
+        check('stalemate: overlaid rampart razed in real combat (not decay)',
+          report.siege.rampartGoneAt !== null && report.siege.rampartGoneAt < 2500);
         check('stalemate: unrazable spawn was NOT razed', report.siege.spawnGoneAt === null);
         check('stalemate ended in withdrawal', report.assault.phases.withdraw !== undefined);
         check('undismantlable target excluded after failed siege',
