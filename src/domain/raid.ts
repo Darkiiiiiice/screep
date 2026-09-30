@@ -40,6 +40,12 @@ export const ASSAULT_MUSTER_TIMEOUT = 600;
 /** 清场保持时长:armed==0 需连续保持这么久才算完成(敌人短暂消失/撤退
  * 不算胜利,§战后侦察确认成果)。 */
 export const ASSAULT_CLEAR_HOLD = 25;
+/** 任务总时长预算(§3.8 最长持续时间):自立队起算。startedAt 每次补员
+ * 重置不能锚,deadline 立队定死;超时按撤退落台账(§失败有界)。 */
+export const ASSAULT_MISSION_TIMEOUT = 3000;
+/** 超时撤退后该目标的评估排除时长:冷却 500 只挡节奏不挡目标——对拆不动
+ * 的房(300M 墙/不可达 spawn)"撤退→再锁→再送"每轮烧 ~3170,靠排除断。 */
+export const ASSAULT_TIMEOUT_EXCLUDE = 10000;
 
 export interface AssaultCandidate {
   name: string;
@@ -55,10 +61,12 @@ export interface AssaultCandidate {
  * 无武装过路者不算)、无塔、情报新鲜、有源、距离达标、可战胜(armed 留出
  * +1 编成余量)。按武装数升序(软柿子先打),同分名字字典序确定性。
  */
-export function evaluateAssaultTargets(args: { rooms: Record<string, RoomIntel>; distances: Record<string, number>; now: number }): AssaultCandidate[] {
+export function evaluateAssaultTargets(args: { rooms: Record<string, RoomIntel>; distances: Record<string, number>; now: number; excludedUntil?: Record<string, number> | undefined }): AssaultCandidate[] {
   const candidates: AssaultCandidate[] = [];
   for (const [name, intel] of Object.entries(args.rooms)) {
     if (isStale(intel, args.now)) continue;
+    // 超时排除期(§3.8 时长预算):上次打不下撤退的房,期内不再上榜。
+    if ((args.excludedUntil?.[name] ?? 0) > args.now) continue;
     if (intel.threat.armed <= 0) continue;
     // 可战胜闸:编成攻击手 = armed+1 封顶,armed 达上限即无局部优势,
     // 打不动只会烧成"折损撤退+冷却+再立队"死循环(§3.8 遇无法破防不持续送兵)。
@@ -103,9 +111,13 @@ export interface AssaultState {
   dismantlers: readonly string[];
   /** 本次出击累计折损(含撤退路上阵亡)。 */
   losses: number;
+  /** 任务总时长截止 tick(立队时定死,不随补员重置;§3.8 时长预算)。 */
+  deadline?: number;
 }
 
 export interface AssaultObservation {
+  /** 当前 tick(时长预算判据)。 */
+  now: number;
   /** 新鲜情报显示目标房武装已清零(完成判据)。 */
   threatCleared: boolean;
   /** 全员已进目标房(行军完成判据,.game 层按 room.name 计数)。 */
@@ -120,7 +132,7 @@ export interface AssaultObservation {
 export interface AssaultVerdict {
   phase: AssaultPhase;
   complete: boolean;
-  withdrawReason?: 'losses' | 'crippled' | undefined;
+  withdrawReason?: 'losses' | 'crippled' | 'timeout' | undefined;
 }
 
 /**
@@ -136,6 +148,11 @@ export function advanceAssault(state: AssaultState, obs: AssaultObservation): As
   // 就撤等于给蹲守者留了重建的壳。
   if (obs.threatCleared && state.phase === 'engage'
     && (state.plan.dismantlers === 0 || obs.structuresCleared)) return { phase: 'done', complete: true };
+  // 总时长超时(§3.8 预算):完成判据在上优先——压哨拆完仍算赢;到期一律
+  // 撤退落台账,目标由接线层记排除期(打不下来的房不反复送兵)。
+  if (state.deadline !== undefined && obs.now >= state.deadline) {
+    return { phase: 'withdraw', complete: false, withdrawReason: 'timeout' };
+  }
   // 撤退判据只在开拔后(travel/engage)生效:集结期队伍天然不满编,
   // "折半/折损"是战场状态,不是集合状态(§不让整队无限等待——集合期
   // 的超时由 .game 层集结时限另行把门)。
@@ -193,7 +210,7 @@ export function assaultSpawnNeed(args: AssaultSpawnNeedArgs): AssaultSpawnNeed |
   const state = args.intel.assault;
   if (!state || state.phase === 'withdraw') {
     if (state) return null;
-    const target = evaluateAssaultTargets({ rooms: args.intel.rooms, distances: args.intel.distances ?? {}, now: args.now })[0];
+    const target = evaluateAssaultTargets({ rooms: args.intel.rooms, distances: args.intel.distances ?? {}, now: args.now, excludedUntil: args.intel.assaultExcludedUntil })[0];
     if (!target) return null;
     if (args.capacity < ASSAULTER_BODY_COST || args.energyAvailable < ASSAULTER_BODY_COST) return null;
     const plan = planAssaultSquad(target.armed, target.structures);

@@ -1,4 +1,4 @@
-import { advanceAssault, ASSAULT_CLEAR_HOLD, ASSAULT_MUSTER_TIMEOUT, evaluateAssaultTargets } from '../domain/raid';
+import { advanceAssault, ASSAULT_CLEAR_HOLD, ASSAULT_MISSION_TIMEOUT, ASSAULT_MUSTER_TIMEOUT, ASSAULT_TIMEOUT_EXCLUDE, evaluateAssaultTargets } from '../domain/raid';
 import { BOOST_ENERGY_PER_PART, BOOST_MINERAL_PER_PART, BOOST_WAIT_LIMIT, combatBoostDemand, squadBoostLeg } from '../domain/boost';
 import type { IntelMemory } from '../domain/intel';
 import { markUnreachable } from '../domain/intel';
@@ -39,6 +39,8 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       state.losses += before - state[list].length;
     }
 
+    // 老存档迁移:在飞任务补 deadline(自立队起算的总预算,M7-8)。
+    state.deadline ??= Game.time + ASSAULT_MISSION_TIMEOUT;
     const targetRoom = intel.rooms[state.target];
     const inRoom = members.filter((c) => c.room.name === state.target);
     // 现场观测写回(任一成员在场即刷新):完成判据与中途失效判据都吃它。
@@ -75,10 +77,14 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       return creep !== undefined && (creep.memory.boostSkipped === true || squadBoostLeg(creep) === null);
     });
     const verdict = advanceAssault(
-      { phase: state.phase, target: state.target, plan: state.plan, attackers: state.attackers, healers: state.healers, dismantlers: state.dismantlers, losses: state.losses },
-      { threatCleared, squadInRoom, squadBoostResolved,
+      { phase: state.phase, target: state.target, plan: state.plan, attackers: state.attackers, healers: state.healers, dismantlers: state.dismantlers, losses: state.losses, deadline: state.deadline },
+      { now: Game.time, threatCleared, squadInRoom, squadBoostResolved,
         structuresCleared: targetRoom !== undefined && targetRoom.threat.structures === 0 },
     );
+    if (verdict.withdrawReason === 'timeout') {
+      // 打不下的房记排除期:冷却只挡节奏,排除才断"再锁同一目标"的循环。
+      (intel.assaultExcludedUntil ??= {})[state.target] = Game.time + ASSAULT_TIMEOUT_EXCLUDE;
+    }
     if (verdict.complete) {
       disband(intel, members, true);
     } else if (verdict.phase !== 'done' && verdict.phase !== state.phase) {

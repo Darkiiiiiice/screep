@@ -72,6 +72,8 @@ export interface IntelMemory {
    dismantlers: string[];
    losses: number;
    startedAt: number;
+   /** 任务总时长截止 tick(立队定死,不随补员重置;§3.8 时长预算,M7-8)。 */
+   deadline?: number;
    /** 交战期间曾目击武装敌(完成判据的门,防敌人消失窗口假完成)。 */
    sawThreat?: boolean;
    /** 首次观测到 armed==0 的 tick(清场保持计时起点,armed>0 即重置)。 */
@@ -80,6 +82,8 @@ export interface IntelMemory {
  /** 最近一次出击解散的 tick 与目标(再出击冷却,§失败有界)。 */
  lastAssaultEndAt?: number;
  lastAssaultTarget?: string;
+ /** 超时撤退的目标排除期:房名 → 排除截止 tick(M7-8 §3.8 时长预算)。 */
+ assaultExcludedUntil?: Record<string, number>;
  /** 突袭目标榜快照(M7-6,评估周期产出;空榜 = 情报范围内无武装占房)。 */
  assaulting?: { tick: number; targets: { name: string; distance: number; armed: number }[] };
  colonies?: Record<string, { claimedAt: number; spawnedAt?: number; lastPioneerWipeAt?: number; lastSquadCount?: number }>;

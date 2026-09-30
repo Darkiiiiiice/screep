@@ -5,7 +5,7 @@ import { guardSpawnNeed } from '../domain/combat';
 import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { attackerSpawnNeed, evaluateRaidTargets } from '../domain/expedition';
-import { ASSAULTER_BODY_PARTS, DISMANTLER_BODY_PARTS, SUPPORT_BODY_PARTS, assaultSpawnNeed, planAssaultSquad } from '../domain/raid';
+import { ASSAULTER_BODY_PARTS, ASSAULT_MISSION_TIMEOUT, DISMANTLER_BODY_PARTS, SUPPORT_BODY_PARTS, assaultSpawnNeed, planAssaultSquad } from '../domain/raid';
 import { driveAssault } from './raid';
 import { runLogistics, runMinerals, runMiners } from './logistics';
 import { driveLabs } from './labs';
@@ -337,7 +337,9 @@ export function runBootstrap(): void {
                                 } else {
                                   const armed = assIntel.rooms[need.target]?.threat.armed ?? 0;
                                   assIntel.assault = { target: need.target, phase: 'muster', plan: need.plan ?? planAssaultSquad(armed),
-                                    attackers: need.role === 'assaulter' ? [name] : [], healers: need.role === 'medic' ? [name] : [], dismantlers: [], losses: 0, startedAt: Game.time };
+                                    attackers: need.role === 'assaulter' ? [name] : [], healers: need.role === 'medic' ? [name] : [], dismantlers: [], losses: 0, startedAt: Game.time,
+                                    // 总时长预算立队定死:补员重置 startedAt 不重置它(§3.8)。
+                                    deadline: Game.time + ASSAULT_MISSION_TIMEOUT };
                                 }
                               }
                             }
