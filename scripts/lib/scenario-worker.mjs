@@ -45,6 +45,7 @@ const raidProbe = args.includes('--raid-probe');
 const assaultProbe = args.includes('--assault-probe');
 const siegeProbe = args.includes('--siege-probe');
 const kiteProbe = args.includes('--kite-probe');
+const stalemateProbe = args.includes('--stalemate-probe');
 const mineralProbe = args.includes('--mineral-probe');
 const linkplaceProbe = args.includes('--linkplace-probe');
 assert(!linkplaceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--linkplace-probe requires --lifecycle --logistics');
@@ -57,6 +58,8 @@ assert(!raidProbe || marketProbe, '--raid-probe requires --market-probe (raid ri
 assert(!assaultProbe || lifecycle && logistics, '--assault-probe requires --lifecycle --logistics');
 assert(!siegeProbe || assaultProbe, '--siege-probe requires --assault-probe (siege rides the assault fixture)');
 assert(!kiteProbe || assaultProbe, '--kite-probe requires --assault-probe (kite rides the assault fixture)');
+assert(!stalemateProbe || assaultProbe, '--stalemate-probe requires --assault-probe');
+assert(!(stalemateProbe && siegeProbe), '--stalemate-probe and --siege-probe are mutually exclusive (both seed W0N2 structures)');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -79,9 +82,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, siegeProbe, kiteProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, siegeProbe, kiteProbe, stalemateProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, siegeProbe, kiteProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, siegeProbe, kiteProbe, stalemateProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -491,26 +494,27 @@ try {
       logisticsEnabled: true,
       assaultEnabled: true,
       intel: { schema: 1,
-        rooms: { W0N2: { observedAt: 0, sources: fixture.sources.map(([x, y], i) => ({ id: `s${i}`, x, y })), threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0, structures: siegeProbe ? 3 : 0 }, controller: { level: 0 } } },
+        rooms: { W0N2: { observedAt: 0, sources: fixture.sources.map(([x, y], i) => ({ id: `s${i}`, x, y })), threat: { hostiles: 2, armed: 2, towers: 0, keeperLairs: 0, structures: (siegeProbe || stalemateProbe) ? 3 : 0 }, controller: { level: 0 } } },
         distances: { W0N2: 1 },
       },
     }));
-    if (siegeProbe) {
+    const siegeSpawnHits = stalemateProbe ? 300000000 : 5000;
+    if (siegeProbe || stalemateProbe) {
       // M7-8 围攻:W0N2 摆敌建筑群——spawn(5000)+压顶 rampart(9000)+extension
       // (1000),共 15000 hits ≈ 200/tick 裸拆 75t。rampart 种子给足:自然衰减
       // 3/tick(RAMPART_DECAY 300/100t)到窗口末(3000)恰归零——断言"早于 2500
       // 消失"即可排除自然衰减假绿。敌属主与蹲守者同('2')。
       await server.world.addRoomObject('W0N2', 'spawn', 30, 30, {
-        user: '2', name: 'SiegeSpawn', store: { energy: 300 }, storeCapacityResource: { energy: 300 }, hits: 5000, hitsMax: 5000,
+        user: '2', name: 'SiegeSpawn', store: { energy: 300 }, storeCapacityResource: { energy: 300 }, hits: siegeSpawnHits, hitsMax: siegeSpawnHits,
       });
       await server.world.addRoomObject('W0N2', 'rampart', 30, 30, { user: '2', hits: 9000, hitsMax: 9000 });
       await server.world.addRoomObject('W0N2', 'extension', 28, 32, {
         user: '2', store: {}, storeCapacityResource: { energy: 50 }, hits: 1000, hitsMax: 1000,
       });
-      report.siege = { spawnGoneAt: null, rampartGoneAt: null, extGoneAt: null };
+      report.siege = { spawnGoneAt: null, rampartGoneAt: null, extGoneAt: null, unrazable: stalemateProbe };
     }
     report.assault = { target: 'W0N2', squatters: ['Squatter-1', 'Squatter-2'], minHits: 2000, clearedAt: null, phases: {}, uhPeak: 0, uhBoosted: 0, inputLabEnergyPeak: 0, inputLabIds: assaultInputLabIds };
-    if (kiteProbe) report.kite = { rangerSpawned: false, rangerMinHits: null, engagedAt: null };
+    if (kiteProbe) report.kite = { rangerSpawned: false, rangerMinHits: null, contactAt: null, bandMin: null, bandDone: false };
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -761,19 +765,68 @@ try {
       }
       if (i === 0) console.log('[assault] squatters seeded in W0N2 (2x 2000hp, 20dps)');
     }
+    // 专职追兵(M7-9 评审修订):蹲守者 attack 部件列首,交火瞬间被剥光,
+    // 原生冲锋压不出风筝窗口——补一只 attack 列尾的高血追击者,由引擎
+    // invasion AI 真实驱动(findAttack 咬路径最近敌对者:生成在游骑东侧 4 格
+    // 即锁定游骑),交火期逐 tick 实测与游骑的环带距离。
+    if (kiteProbe && !report.kite.chaserSpawned && report.assault.phases.engage !== undefined) {
+      const objs = await server.world.roomObjects('W0N2');
+      const ranger = objs.find(o => o.type === 'creep' && String(o.name).startsWith('ranger-'));
+      if (ranger) {
+        await server.world.addRoomObject('W0N2', 'creep', Math.min(47, ranger.x + 4), ranger.y, {
+          user: '2', name: 'Chaser-1', body: [
+            ...Array.from({ length: 49 }, () => ({ type: 'move', hits: 100 })),
+            { type: 'attack', hits: 100 },
+          ],
+          hits: 5000, hitsMax: 5000, store: {}, storeCapacity: 0, fatigue: 0, spawning: false, ageTime: 4000, actionLog: {},
+        });
+        report.kite.chaserSpawned = i;
+        console.log('[kite] chaser seeded at', Math.min(47, ranger.x + 4), ranger.y);
+      }
+    }
+    if (kiteProbe && report.kite.chaserSpawned && i === report.kite.chaserSpawned + 30) {
+      // 兜底清场:追兵是武装敌对者,赖着不走会卡住任务完成判据。
+      await db['rooms.objects'].removeWhere({ type: 'creep', name: 'Chaser-1' });
+    }
+    if (kiteProbe && (report.assault.minHits < 2000 || report.kite.chaserSpawned) && !report.kite.bandDone) {
+      // 风筝环带逐 tick 实测(评审:engaged+满血证不了撤退腿——追兵逼近后
+      // chebyshev 从未 <2 才算风筝成立)。
+      const objs = await server.world.roomObjects('W0N2');
+      const rangers = objs.filter(o => o.type === 'creep' && String(o.name).startsWith('ranger-'));
+      const meleeFoes = objs.filter(o => o.type === 'creep'
+        && (report.assault.squatters.includes(o.name) || o.name === 'Chaser-1')
+        && (o.body || []).some(p => p.type === 'attack' && p.hits > 0));
+      for (const r of rangers) {
+        for (const f of meleeFoes) {
+          const d = Math.max(Math.abs(f.x - r.x), Math.abs(f.y - r.y));
+          if (d <= 3) {
+            report.kite.contactAt ??= i;
+            report.kite.bandMin = Math.min(report.kite.bandMin ?? 99, d);
+          }
+        }
+      }
+      if (meleeFoes.length === 0 && report.kite.contactAt !== null) report.kite.bandDone = true;
+    }
     if (assaultProbe && i % 5 === 0) {
       const sq = (await server.world.roomObjects('W0N2')).filter(o => o.type === 'creep' && report.assault.squatters.includes(o.name));
       if (sq.length > 0) report.assault.minHits = Math.min(report.assault.minHits, ...sq.map(o => o.hits ?? 2000));
       else if (report.assault.minHits < 2000) report.assault.clearedAt ??= i;
+      // 蹲守者行踪(伤害机制取证:它们会被驱动北移冲锋,越界进 W0N1 吃塔)
+      if (kiteProbe) (report.assault.sqSeries ??= []).push([i, ...sq.flatMap(o => [o.name, o.x, o.y, o.hits])]);
       // 相位 5-tick 直采:补投停止后战斗变快,engage 相位窗(~80t)短于
       // report.ticks 的 ~100t 采样间隔,快照序列会整体错过。
       try {
         const env = server.common.storage.env;
         const raw = await env.get(env.keys.MEMORY + bot.id);
         const aa = (JSON.parse(raw || '{}').intel ?? {}).assault;
-        if (aa?.phase) report.assault.phases[aa.phase] = i;
+        if (aa?.phase) report.assault.phases[aa.phase] ??= i;  // 首见语义(曾错记末见,把 455 的翻转显示成 1615)
         if (aa?.withdrawReason) report.assault.withdrawReason = aa.withdrawReason;
         if (aa?.lastLoss) report.assault.lastLoss = aa.lastLoss;
+        // 立队计数(排除表闭环证据:烂尾收档后不得再立)+ 排除期读数
+        if (aa && !report.assault._prevActive) report.assault.foundings = (report.assault.foundings ?? 0) + 1;
+        report.assault._prevActive = !!aa;
+        const exc = (JSON.parse(raw || '{}').intel ?? {}).assaultExcludedUntil;
+        if (exc) report.assault.excludedUntil = exc;
       } catch { /* 采样失败不影响世界 */ }
       // 强化链证据(M7-7):产物峰值(反应链通)+ 曾见 UH 强化部件(boostCreep 通),
       // 成员收档即解散,终帧扫不到——按 ever-seen 记账。
@@ -814,8 +867,6 @@ try {
           if (o.type !== 'creep' || !String(o.name).startsWith('ranger-')) continue;
           report.kite.rangerSpawned = true;
           report.kite.rangerMinHits = Math.min(report.kite.rangerMinHits ?? Infinity, o.hits ?? 0);
-          if (o.room === 'W0N2' && inField.some(h => h.type === 'creep' && report.assault.squatters.includes(h.name)
-            && Math.max(Math.abs(h.x - o.x), Math.abs(h.y - o.y)) <= 3)) report.kite.engagedAt ??= i;
         }
       }
       if (siegeProbe) {
@@ -1378,21 +1429,38 @@ try {
       check('squad reached the engage phase', report.assault.phases.engage !== undefined);
       // 完胜区分:补投已停,残余蹲守者自然自灭后 clearedAt 照落、ledger 照收档,
       // 折损撤退的任务也能静默全绿——必须断言全程未见 withdraw 相位。
-      check('mission ended in clean victory, no withdrawal',
-        report.assault.phases.engage !== undefined && report.assault.phases.withdraw === undefined);
+      if (!stalemateProbe) {
+        check('mission ended in clean victory, no withdrawal',
+          report.assault.phases.engage !== undefined && report.assault.phases.withdraw === undefined);
+      }
       // M7-7 强化链:UH 产物曾 ≥ 一个攻击手的满额(90=3件×30,反应链通);
       // 攻击手身体曾见 UH 强化件(boostCreep 通,强化腿真实执行)。
       check('UH produced by the reaction line', report.assault.uhPeak >= 90);
       check('assaulters boosted with UH before departing', report.assault.uhBoosted >= 1);
       check('input labs never fed energy (sink scoped to demanded compound)', report.assault.inputLabEnergyPeak === 0);
       if (kiteProbe) {
-        // 远程拉扯(M7-9):armed=2 编成带游骑;蹲守者纯近战——风筝成立则
-        // 游骑全程 400 血无划伤,且确曾压进 3 环输出(不是远程围观)。
+        // 远程拉扯(M7-9):armed=2 编成带游骑;蹲守者由引擎 invasion AI 真实
+        // 驱动冲锋——风筝成立要三层:入环交战、追兵逼近过 3 环、逼近后环带
+        // 从未 <2(撤退腿实证)+ 全程无划伤。
         check('kite ranger fielded in the squad', report.kite.rangerSpawned);
-        check('kite ranger engaged inside range 3', report.kite.engagedAt !== null);
+        check('melee pursuit reached the ranger ring (contact <=3)', report.kite.contactAt !== null);
+        check('kite band never broke (melee never closed under 2)', (report.kite.bandMin ?? 99) >= 2);
         check('kite ranger never scratched by melee squatters', report.kite.rangerMinHits === 400);
       }
-      if (siegeProbe) {
+      if (stalemateProbe) {
+        // 烂尾围攻(M7-8b 评审修订):spawn 3e8 拆不完——可拆的墙/扩展照拆
+        // (拆墙腿真实工作过),任务以撤退收档,目标入排除期,且不再二次立队
+        // (排除表断"撤退→冷却→再锁"送兵循环的端到端证据)。
+        // 战术序 spawn 优先(正确教义:先掐产能)——拆墙手会死磕 3e8 的
+        // spawn 直到撤退,墙/扩展本就在它身后;场景的学习目标是撤退+排除
+        // +不再立队,不断"先拆软目标"(那是 spawn-first 教义的反面)。
+        check('stalemate: unrazable spawn was NOT razed', report.siege.spawnGoneAt === null);
+        check('stalemate ended in withdrawal', report.assault.phases.withdraw !== undefined);
+        check('undismantlable target excluded after failed siege',
+          (report.assault.excludedUntil?.W0N2 ?? 0) > 0);
+        check('no refounding against the excluded room', (report.assault.foundings ?? 0) <= 1);
+      }
+      if (siegeProbe && !stalemateProbe) {
         // 围攻(M7-8):任务完成判据含"敌建筑拆完"——spawn/rampart/ext 全灭才收档。
         check('siege dismantled the hostile spawn', report.siege.spawnGoneAt !== null);
         check('siege chewed the rampart before decay could explain (<2500)',

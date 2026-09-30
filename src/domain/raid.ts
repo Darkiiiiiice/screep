@@ -47,9 +47,22 @@ export const ASSAULT_CLEAR_HOLD = 25;
 /** 任务总时长预算(§3.8 最长持续时间):自立队起算。startedAt 每次补员
  * 重置不能锚,deadline 立队定死;超时按撤退落台账(§失败有界)。 */
 export const ASSAULT_MISSION_TIMEOUT = 3000;
-/** 超时撤退后该目标的评估排除时长:冷却 500 只挡节奏不挡目标——对拆不动
- * 的房(300M 墙/不可达 spawn)"撤退→再锁→再送"每轮烧 ~3170,靠排除断。 */
+/** 烂尾任务的评估排除时长:冷却 500 只挡节奏不挡目标——对拆不动的房
+ * (300M 墙/不可达 spawn)"撤退→再锁→再送"每轮烧 ~3170,靠排除断。 */
 export const ASSAULT_TIMEOUT_EXCLUDE = 10000;
+
+/**
+ * 围攻烂尾排除(纯,M7-8b 评审修订):带拆墙手的任务以撤退收档、敌建筑仍在、
+ * 且武装曾清零(打不下来的是建筑不是人)→ 记排除期。锚必须挂终态观测:
+ * 密封房里零战损,成员 TTL 到期的折损撤退(~1500t)永远抢在任务 deadline
+ * (3000)前面,只挂 timeout 的排除对主场景是死代码;deadline 退为纯保险
+ * (无折损的不可达空转循环才由它兜底)。武装未清过的败仗不排除——那是
+ * 战力误判,评估可战胜闸自会涨;敌人也可能自行离开。
+ */
+export function assaultExclusionDue(state: { plan: { dismantlers: number }; withdrawReason?: string | undefined; clearedSince?: number | undefined }, structuresNow: number | undefined): boolean {
+  return state.withdrawReason !== undefined && state.plan.dismantlers > 0
+    && structuresNow !== undefined && structuresNow > 0 && state.clearedSince !== undefined;
+}
 
 export interface AssaultCandidate {
   name: string;

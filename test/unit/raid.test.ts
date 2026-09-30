@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { advanceAssault, assaultSpawnNeed, evaluateAssaultTargets, planAssaultSquad } from '../../src/domain/raid';
+import { advanceAssault, assaultExclusionDue, assaultSpawnNeed, evaluateAssaultTargets, planAssaultSquad } from '../../src/domain/raid';
 import type { AssaultState } from '../../src/domain/raid';
 import type { RoomIntel } from '../../src/domain/intel';
 import { INTEL_STALE } from '../../src/domain/intel';
@@ -9,6 +9,20 @@ const room = (over: Partial<RoomIntel> = {}): RoomIntel => ({
   sources: [{ id: 's1', x: 1, y: 1 }],
   threat: { hostiles: 1, armed: 2, towers: 0, keeperLairs: 0, structures: 0 },
   ...over,
+});
+
+describe('assaultExclusionDue (M7-8b)', () => {
+  const base = { plan: { dismantlers: 1 }, withdrawReason: 'losses' as const, clearedSince: 100 };
+  it('stalled siege with armed cleared and structures left -> exclude', () => {
+    expect(assaultExclusionDue(base, 1)).toBe(true);
+  });
+  it('no dismantler plan / structures razed / armed never cleared / not withdrawn -> no exclusion', () => {
+    expect(assaultExclusionDue({ ...base, plan: { dismantlers: 0 } }, 1)).toBe(false);
+    expect(assaultExclusionDue(base, 0)).toBe(false);
+    expect(assaultExclusionDue({ ...base, clearedSince: undefined }, 1)).toBe(false);
+    expect(assaultExclusionDue({ ...base, withdrawReason: undefined }, 1)).toBe(false);
+    expect(assaultExclusionDue(base, undefined)).toBe(false);
+  });
 });
 
 describe('assault target evaluation (M7-6)', () => {

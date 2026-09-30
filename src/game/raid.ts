@@ -1,5 +1,5 @@
-import { advanceAssault, ASSAULT_CLEAR_HOLD, ASSAULT_MISSION_TIMEOUT, ASSAULT_MUSTER_TIMEOUT, ASSAULT_TIMEOUT_EXCLUDE, evaluateAssaultTargets } from '../domain/raid';
-import { BOOST_ENERGY_PER_PART, BOOST_MINERAL_PER_PART, BOOST_WAIT_LIMIT, combatBoostDemand, squadBoostLeg } from '../domain/boost';
+import { advanceAssault, ASSAULT_CLEAR_HOLD, ASSAULT_MISSION_TIMEOUT, ASSAULT_MUSTER_TIMEOUT, ASSAULT_TIMEOUT_EXCLUDE, assaultExclusionDue, evaluateAssaultTargets } from '../domain/raid';
+import { BOOST_ENERGY_PER_PART, BOOST_MINERAL_PER_PART, BOOST_WAIT_LIMIT, boostFeasible, combatBoostDemand, squadBoostLeg } from '../domain/boost';
 import type { IntelMemory } from '../domain/intel';
 import { markUnreachable } from '../domain/intel';
 import { intelState, observeRoom } from './intel';
@@ -154,7 +154,20 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
             if (roomLabs.length === 0) { mem.boostSkipped = true; continue; }
             const labs = roomLabs.filter((l) => labMineral(l) === leg.compound);
             const lab = labs.find(has) ?? labs[0];
-            if (!lab) continue;
+            if (!lab) {
+              // 无持料 lab:库存(storage/terminal/lab)掏不出本体也掏不出原料
+              // = 本任务永远等不到——立即放弃开拔(强化非前提);有料在产贴着等。
+              const stock: Record<string, number> = {};
+              for (const st of [creep.room.storage, creep.room.terminal]) {
+                if (st) for (const [res, amt] of Object.entries(st.store)) stock[res] = (stock[res] ?? 0) + (amt as number);
+              }
+              for (const l of roomLabs) {
+                const m = labMineral(l);
+                if (m) stock[m] = (stock[m] ?? 0) + (l.store.getUsedCapacity(m as ResourceConstant) ?? 0);
+              }
+              if (!boostFeasible(leg.compound, stock)) mem.boostSkipped = true;
+              continue;
+            }
             else if (!creep.pos.isNearTo(lab.pos)) {
               try { creep.moveTo(lab.pos, { reusePath: 10 }); } catch {
                 markUnreachable(intel, creep.room.name, Game.time);
@@ -195,6 +208,8 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
     // 列队,等全队到齐翻 engage 再开打——零散进场=被逐个击破(探针实证:
     // 先头攻击手孤身在 25,41 接触双蹲守者,15 tick 被打掉 460 血折损撤退)。
     if (phase === 'travel') {
+      // 列队不缴械(评审修订):站桩期被打要还手——医疗照治、贴脸照打、
+      // 3 环照射;只是不追击不深入(实证:医疗站桩被焦点打死,旁边攻击手满血)。
       if (mem.home) {
         try {
           const tile = exitTileOf(target, mem.home);
@@ -203,6 +218,24 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
           markUnreachable(intel, target, Game.time);
           dropFromRoster(intel, creep.name);
           creep.suicide();
+        }
+      }
+      if (mem.role === 'medic') {
+        // 医疗先归位再行医——只治不走会把小队永远拖在 travel(实证:医疗
+        // 流落场外,squadAssembled 永不成立,全队站桩到 TTL 耗尽)。
+        healWounded(creep);
+        continue;
+      }
+      const stager = creep.room.find(FIND_HOSTILE_CREEPS)
+        .filter((h) => !allies.includes(h.owner.username))
+        .sort((a, b) => a.pos.getRangeTo(creep) - b.pos.getRangeTo(creep))[0];
+      if (stager) {
+        const d = creep.pos.getRangeTo(stager);
+        if (mem.role === 'assaulter' && d <= 1) creep.attack(stager);
+        else if (mem.role === 'ranger' && d <= 3) {
+          creep.rangedAttack(stager);
+          const meleeArmed = stager.body.some((p) => p.type === ATTACK && p.hits > 0);
+          if (d <= 3 && meleeArmed) kiteRetreatStep(creep, stager.pos);
         }
       }
       continue;
@@ -217,7 +250,8 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       }
     } else if (mem.role === 'ranger') {
       // 游骑(M7-9 远程拉扯):3 环内全额输出(引擎 rangedAttack 无距离衰减);
-      // 被近战贴到 2 环内就先射后直线后撤——等速近战永远追不上风筝。
+      // 近战压到 3 环(满射程缘)就边射边撤——等速追击下环带恒 3,追兵永远
+      // 贴不上(实证:d<3 才撤的均衡是 d=1 恒贴脸,25 tick 连咬)。
       // 对远程/无近战敌对射不亏(同 10/件),不枉风。
       const foe = creep.room.find(FIND_HOSTILE_CREEPS)
         .filter((h) => !allies.includes(h.owner.username))
@@ -228,7 +262,7 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
         else {
           creep.rangedAttack(foe);
           const meleeArmed = foe.body.some((p) => p.type === ATTACK && p.hits > 0);
-          if (d < 3 && meleeArmed) creep.move(foe.pos.getDirectionTo(creep.pos));
+          if (d <= 3 && meleeArmed) kiteRetreatStep(creep, foe.pos);
         }
       }
     } else if (mem.role === 'dismantler') {
@@ -254,16 +288,7 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
           || a.id.localeCompare(b.id))[0];
       if (structure && creep.dismantle(structure) === ERR_NOT_IN_RANGE) creep.moveTo(structure.pos);
     } else {
-      const wounded = creep.room.find(FIND_MY_CREEPS)
-        .filter((c) => c.hits < c.hitsMax)
-        .sort((a, b) => a.hits / a.hitsMax - b.hits / b.hitsMax)[0];
-      if (wounded) {
-        if (creep.pos.isNearTo(wounded)) creep.heal(wounded);
-        else {
-          creep.rangedHeal(wounded);
-          creep.moveTo(wounded);
-        }
-      }
+      healWounded(creep);
     }
   }
 
@@ -283,6 +308,42 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
   }
 }
 
+/** 风筝后撤步(M7-9 评审修订):直线远离被地形/队友堵死时按 ±45°、±90°
+ * 顺序横切——风筝死于顶墙被咬(实证:追兵把游骑逼到队友身后,环带破 1,
+ * 挨了一刀 30),不死于侧移。全堵也交直线意图(交通仲裁下 tick 可能挪开)。 */
+function kiteRetreatStep(creep: Creep, from: RoomPosition): void {
+  const dir = from.getDirectionTo(creep.pos);
+  const order = [dir, ((dir + 6) % 8) + 1, (dir % 8) + 1, ((dir + 5) % 8) + 1, ((dir + 3) % 8) + 1];
+  const dx = [0, 0, 1, 1, 1, 0, -1, -1, -1];
+  const dy = [0, -1, -1, 0, 1, 1, 1, 0, -1];
+  const terrain = Game.map.getRoomTerrain(creep.room.name);
+  const occupied = new Set(creep.room.find(FIND_CREEPS).map((c) => c.pos.x * 50 + c.pos.y));
+  for (const d of order) {
+    const nx = creep.pos.x + (dx[d] ?? 0);
+    const ny = creep.pos.y + (dy[d] ?? 0);
+    if (nx < 1 || nx > 48 || ny < 1 || ny > 48) continue;
+    if (terrain.get(nx, ny) === TERRAIN_MASK_WALL) continue;
+    if (occupied.has(nx * 50 + ny)) continue;
+    creep.move(d as DirectionConstant);
+    return;
+  }
+  creep.move(dir);
+}
+
+/** 医疗共性腿:治疗本房最重伤我方(邻接 heal,否则 rangedHeal+贴近)。 */
+function healWounded(creep: Creep): void {
+  const wounded = creep.room.find(FIND_MY_CREEPS)
+    .filter((c) => c.hits < c.hitsMax)
+    .sort((a, b) => a.hits / a.hitsMax - b.hits / b.hitsMax)[0];
+  if (wounded) {
+    if (creep.pos.isNearTo(wounded)) creep.heal(wounded);
+    else {
+      creep.rangedHeal(wounded);
+      creep.moveTo(wounded);
+    }
+  }
+}
+
 /** 出击解散:完成即原地退役(战争消耗,尸体不入账);冷却与目标台账落地。 */
 function disband(intel: IntelMemory, members: Creep[], suicideNow: boolean): void {
   for (const creep of members) {
@@ -295,6 +356,11 @@ function disband(intel: IntelMemory, members: Creep[], suicideNow: boolean): voi
 function finalizeAssault(intel: IntelMemory): void {
   const state = intel.assault;
   if (!state) return;
+  // 烂尾围攻记排除期(评审修订:锚终态观测而非 timeout——密封房零战损,
+  // TTL 折损撤退永远抢跑 deadline)。完成收档(无 withdrawReason)不涉及。
+  if (assaultExclusionDue(state, intel.rooms[state.target]?.threat.structures)) {
+    (intel.assaultExcludedUntil ??= {})[state.target] = Game.time + ASSAULT_TIMEOUT_EXCLUDE;
+  }
   intel.lastAssaultEndAt = Game.time;
   intel.lastAssaultTarget = state.target;
   delete intel.assault;

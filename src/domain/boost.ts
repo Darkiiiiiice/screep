@@ -75,6 +75,17 @@ export function combatBoostDemand(plan: { attackers: number; healers: number; di
 }
 
 /**
+ * 强化可行性(纯,M7-9 评审):化合物本体或一对原料在库存里才有等的价值——
+ * 都掏不出即"无法及时配齐"(§3.10 明确无 boost 方案),立即放弃开拔,
+ * 不空等 deadline(实证:KO 无料房里游骑白站桩 300t,比大队晚到场 ~100t)。
+ */
+export function boostFeasible(compound: string, stock: Readonly<Record<string, number>>): boolean {
+  if ((stock[compound] ?? 0) > 0) return true;
+  const recipe = LAB_RECIPES.find((r) => r.out === compound);
+  return recipe !== undefined && recipe.inputs.every((i) => (stock[i] ?? 0) > 0);
+}
+
+/**
  * 强化优先配方(纯):任务在册且某化合物未达需求时,优先开它的炉
  * (强化料是任务时效料——集结窗口内产不出来就白编队);需求已满/无
  * 任务/原料不齐则回落通用表,行为与 M6-5 完全一致。

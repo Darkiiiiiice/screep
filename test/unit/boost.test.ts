@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOOST_MINERAL_PER_PART, chooseRecipeWithDemand, combatBoostDemand, squadBoostLeg, stockWithLabHoldings } from '../../src/domain/boost';
+import { boostFeasible, BOOST_MINERAL_PER_PART, chooseRecipeWithDemand, combatBoostDemand, squadBoostLeg, stockWithLabHoldings } from '../../src/domain/boost';
 
 describe('squad boost leg (M7-7)', () => {
   const assaulter = (boosts: Array<string | undefined> = [undefined, undefined, undefined]) => ({
@@ -43,6 +43,16 @@ describe('combat boost demand (M7-7)', () => {
     // M7-9:游骑 KO 需求(2 件 ranged_attack × 30);无编成不进账
     expect(combatBoostDemand({ attackers: 3, healers: 2, dismantlers: 0, rangers: 1 }))
       .toEqual({ UH: 9 * BOOST_MINERAL_PER_PART, KO: 2 * BOOST_MINERAL_PER_PART });
+  });
+
+  it('boostFeasible: compound, inputs, or neither (M7-9 review)', () => {
+    // 本体在库 -> 可行
+    expect(boostFeasible('KO', { KO: 10 })).toBe(true);
+    // 本体缺但一对原料齐 -> 可行(反应链能产)
+    expect(boostFeasible('KO', { K: 100, O: 100 })).toBe(true);
+    // 本体缺 + 原料缺一 -> 不可行(永远等不到,应立即无 boost 开拔)
+    expect(boostFeasible('KO', { K: 100 })).toBe(false);
+    expect(boostFeasible('KO', {})).toBe(false);
   });
 });
 
