@@ -54,7 +54,8 @@
     "test:squad": "node scripts/scenario.mjs --lifecycle --logistics --combat-probe --squad-probe",
     "test:raid": "node scripts/scenario.mjs --lifecycle --logistics --labs-probe --market-probe --raid-probe",
     "test:assault": "node scripts/scenario.mjs --lifecycle --logistics --assault-probe",
-    "test:siege": "node scripts/scenario.mjs --lifecycle --logistics --assault-probe --siege-probe"
+    "test:siege": "node scripts/scenario.mjs --lifecycle --logistics --assault-probe --siege-probe",
+    "test:kite": "node scripts/scenario.mjs --lifecycle --logistics --assault-probe --kite-probe"
   },
   "dependencies": {
     "screeps-api": "^2.1.0"

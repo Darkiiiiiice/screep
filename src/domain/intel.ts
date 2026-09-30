@@ -66,14 +66,19 @@ export interface IntelMemory {
  assault?: {
    target: string;
    phase: 'muster' | 'travel' | 'engage' | 'withdraw';
-   plan: { attackers: number; healers: number; dismantlers: number };
+   plan: { attackers: number; healers: number; dismantlers: number; rangers: number };
    attackers: string[];
    healers: string[];
    dismantlers: string[];
+   rangers: string[];
    losses: number;
    startedAt: number;
    /** 任务总时长截止 tick(立队定死,不随补员重置;§3.8 时长预算,M7-8)。 */
    deadline?: number;
+   /** 撤退原因台账(§失败有界:折损/折半/超时/目标失效/集结超时)。 */
+   withdrawReason?: string;
+   /** 最近折损名册快照(诊断用:谁在哪 tick 从在册消失)。 */
+   lastLoss?: { names: string[]; tick: number };
    /** 交战期间曾目击武装敌(完成判据的门,防敌人消失窗口假完成)。 */
    sawThreat?: boolean;
    /** 首次观测到 armed==0 的 tick(清场保持计时起点,armed>0 即重置)。 */

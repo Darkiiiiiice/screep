@@ -40,6 +40,9 @@ describe('combat boost demand (M7-7)', () => {
     expect(combatBoostDemand({ attackers: 0, healers: 0 })).toEqual({});
     // M7-8:拆墙手 ZH 需求(4 work × 30)
     expect(combatBoostDemand({ attackers: 3, healers: 2, dismantlers: 1 })).toEqual({ UH: 9 * BOOST_MINERAL_PER_PART, ZH: 4 * BOOST_MINERAL_PER_PART });
+    // M7-9:游骑 KO 需求(2 件 ranged_attack × 30);无编成不进账
+    expect(combatBoostDemand({ attackers: 3, healers: 2, dismantlers: 0, rangers: 1 }))
+      .toEqual({ UH: 9 * BOOST_MINERAL_PER_PART, KO: 2 * BOOST_MINERAL_PER_PART });
   });
 });
 

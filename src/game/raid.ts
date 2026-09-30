@@ -26,21 +26,26 @@ declare global {
 export function driveAssault(allies: readonly string[], cpuLimit: number): void {
   const intel = intelState();
   const state = intel.assault;
-  const members = Object.values(Game.creeps).filter((c) => (c.memory.role === 'assaulter' || c.memory.role === 'medic' || c.memory.role === 'dismantler') && !c.spawning);
+  const members = Object.values(Game.creeps).filter((c) => (c.memory.role === 'assaulter' || c.memory.role === 'medic' || c.memory.role === 'dismantler' || c.memory.role === 'ranger') && !c.spawning);
 
   if (state) {
     // 折损同步:在册但已不在场 → 记折损一次(名单即台账)。
     // 老存档迁移(M7-8 前无拆墙手字段):缺省补空,台账语义不变。
     state.dismantlers ??= [];
     state.plan.dismantlers ??= 0;
-    for (const list of ['attackers', 'healers', 'dismantlers'] as const) {
+    for (const list of ['attackers', 'healers', 'dismantlers', 'rangers'] as const) {
       const before = state[list].length;
-      state[list] = state[list].filter((name) => Object.values(Game.creeps).some((c) => c.name === name));
+      const kept = state[list].filter((name) => Object.values(Game.creeps).some((c) => c.name === name));
+      const lost = state[list].filter((name) => !kept.includes(name));
+      if (lost.length > 0) state.lastLoss = { names: lost, tick: Game.time };
+      state[list] = kept;
       state.losses += before - state[list].length;
     }
 
-    // 老存档迁移:在飞任务补 deadline(自立队起算的总预算,M7-8)。
+    // 老存档迁移:在飞任务补 deadline(自立队起算的总预算,M7-8)/游骑名册(M7-9)。
     state.deadline ??= Game.time + ASSAULT_MISSION_TIMEOUT;
+    state.rangers ??= [];
+    state.plan.rangers ??= 0;
     const targetRoom = intel.rooms[state.target];
     const inRoom = members.filter((c) => c.room.name === state.target);
     // 现场观测写回(任一成员在场即刷新):完成判据与中途失效判据都吃它。
@@ -63,22 +68,30 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
     if ((state.phase === 'travel' || state.phase === 'engage') && targetRoom !== undefined
       && (targetRoom.controller?.owner !== undefined || targetRoom.threat.towers > 0)) {
       state.phase = 'withdraw';
+      state.withdrawReason = 'invalidated';
     }
     // 集结超时(§不让整队无限等待):超时未齐即撤退。
     if (state.phase === 'muster' && Game.time - state.startedAt > ASSAULT_MUSTER_TIMEOUT) {
       state.phase = 'withdraw';
+      state.withdrawReason = 'muster-timeout';
     }
 
     // M7-7 开拔闸:满编只是人数到齐——全员"强化已了结"(已强化/已放弃/
     // 本无化合物)才翻 travel,否则编成一满强化腿就被名单数跳过(探针实证:
     // 能量靠 sink 腿现送时 3 攻 0 强化开拔)。孵化中的成员按未了结计。
-    const squadBoostResolved = [...state.attackers, ...state.healers, ...state.dismantlers].every((name) => {
+    const squadBoostResolved = [...state.attackers, ...state.healers, ...state.dismantlers, ...state.rangers].every((name) => {
       const creep = Game.creeps[name];
       return creep !== undefined && (creep.memory.boostSkipped === true || squadBoostLeg(creep) === null);
     });
+    // 集结位置闸(M7-9):名册齐只是数字——全员贴集结格(母房侧门格,2 环)
+    // 才算集合完毕;迟到的(强化等待/后补员)不拖整队去敌门格站桩挨打。
+    const homeRoom = members[0]?.memory.home;
+    const musterTile = homeRoom ? exitTileOf(homeRoom, state.target) : undefined;
+    const squadAssembled = musterTile !== undefined && members.length > 0
+      && members.every((m) => m.pos.inRangeTo(musterTile, 2));
     const verdict = advanceAssault(
-      { phase: state.phase, target: state.target, plan: state.plan, attackers: state.attackers, healers: state.healers, dismantlers: state.dismantlers, losses: state.losses, deadline: state.deadline },
-      { now: Game.time, threatCleared, squadInRoom, squadBoostResolved,
+      { phase: state.phase, target: state.target, plan: state.plan, attackers: state.attackers, healers: state.healers, dismantlers: state.dismantlers, rangers: state.rangers, losses: state.losses, deadline: state.deadline },
+      { now: Game.time, threatCleared, squadInRoom, squadBoostResolved, squadAssembled,
         structuresCleared: targetRoom !== undefined && targetRoom.threat.structures === 0 },
     );
     if (verdict.withdrawReason === 'timeout') {
@@ -89,6 +102,7 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       disband(intel, members, true);
     } else if (verdict.phase !== 'done' && verdict.phase !== state.phase) {
       state.phase = verdict.phase;
+      if (verdict.withdrawReason) state.withdrawReason = verdict.withdrawReason;
     }
   }
 
@@ -177,6 +191,22 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
       }
       continue;
     }
+    // 跨房同步(M7-9,§3.8 出口两侧集结):travel 期进房即贴朝母房的门格
+    // 列队,等全队到齐翻 engage 再开打——零散进场=被逐个击破(探针实证:
+    // 先头攻击手孤身在 25,41 接触双蹲守者,15 tick 被打掉 460 血折损撤退)。
+    if (phase === 'travel') {
+      if (mem.home) {
+        try {
+          const tile = exitTileOf(target, mem.home);
+          if (!creep.pos.isNearTo(tile)) creep.moveTo(tile, { reusePath: 10 });
+        } catch {
+          markUnreachable(intel, target, Game.time);
+          dropFromRoster(intel, creep.name);
+          creep.suicide();
+        }
+      }
+      continue;
+    }
     // 交战/在目标房:攻击手扑咬最近武装敌,医疗治疗最重伤我方。
     if (mem.role === 'assaulter') {
       const foe = creep.room.find(FIND_HOSTILE_CREEPS)
@@ -184,6 +214,22 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
         .sort((a, b) => a.pos.getRangeTo(creep) - b.pos.getRangeTo(creep))[0];
       if (foe) {
         if (creep.attack(foe) === ERR_NOT_IN_RANGE) creep.moveTo(foe);
+      }
+    } else if (mem.role === 'ranger') {
+      // 游骑(M7-9 远程拉扯):3 环内全额输出(引擎 rangedAttack 无距离衰减);
+      // 被近战贴到 2 环内就先射后直线后撤——等速近战永远追不上风筝。
+      // 对远程/无近战敌对射不亏(同 10/件),不枉风。
+      const foe = creep.room.find(FIND_HOSTILE_CREEPS)
+        .filter((h) => !allies.includes(h.owner.username))
+        .sort((a, b) => a.pos.getRangeTo(creep) - b.pos.getRangeTo(creep))[0];
+      if (foe) {
+        const d = creep.pos.getRangeTo(foe);
+        if (d > 3) creep.moveTo(foe, { range: 3 });
+        else {
+          creep.rangedAttack(foe);
+          const meleeArmed = foe.body.some((p) => p.type === ATTACK && p.hits > 0);
+          if (d < 3 && meleeArmed) creep.move(foe.pos.getDirectionTo(creep.pos));
+        }
       }
     } else if (mem.role === 'dismantler') {
       // 拆墙手(M7-8):无战力——武装在场退到朝母房的门格候场(不贴火力区);
@@ -224,7 +270,7 @@ export function driveAssault(allies: readonly string[], cpuLimit: number): void 
   // 撤退收尾:名单清空才落冷却与台账(撤退途中不再立新队——assaultSpawnNeed
   // 对 withdraw 阶段返回 null)。
   if (intel.assault && intel.assault.phase === 'withdraw' && intel.assault.attackers.length === 0
-    && intel.assault.healers.length === 0 && intel.assault.dismantlers.length === 0) {
+    && intel.assault.healers.length === 0 && intel.assault.dismantlers.length === 0 && intel.assault.rangers.length === 0) {
     finalizeAssault(intel);
   }
 
@@ -260,6 +306,7 @@ function dropFromRoster(intel: IntelMemory, name: string): void {
   state.attackers = state.attackers.filter((n) => n !== name);
   state.healers = state.healers.filter((n) => n !== name);
   state.dismantlers = state.dismantlers.filter((n) => n !== name);
+  state.rangers = state.rangers.filter((n) => n !== name);
 }
 
 /** 母房朝目标房一侧的集结格:边界内缩 2 格(绝不抵住传送门格——探针实证:

@@ -9,7 +9,7 @@
 
 import { LAB_INPUT_FLOOR, LAB_RECIPES, chooseRecipe } from './labs';
 import type { LabRecipe } from './labs';
-import { ASSAULTER_BODY_PARTS, DISMANTLER_BODY_PARTS, SUPPORT_BODY_PARTS } from './raid';
+import { ASSAULTER_BODY_PARTS, DISMANTLER_BODY_PARTS, RANGER_BODY_PARTS, SUPPORT_BODY_PARTS } from './raid';
 
 /** 每强化一件部件,lab 消耗的矿物/能量(引擎常量镜像,纯层算量用)。 */
 export const BOOST_MINERAL_PER_PART = 30;
@@ -37,7 +37,7 @@ const T1_BOOSTABLE: Readonly<Record<string, readonly string[]>> = {
 
 /** 角色 → 领的化合物:突击手 UH(M7-7)、拆墙手 ZH(M7-8);医疗 LO 等随
  * 围攻刀扩表。 */
-const ROLE_COMPOUNDS: Readonly<Record<string, string>> = { assaulter: 'UH', dismantler: 'ZH' };
+const ROLE_COMPOUNDS: Readonly<Record<string, string>> = { assaulter: 'UH', dismantler: 'ZH', ranger: 'KO' };
 
 export interface BoostLeg { compound: string; parts: number }
 
@@ -60,7 +60,7 @@ export function squadBoostLeg(creep: { memory: { role?: string | undefined }; bo
  * UH 只吃 attack,LO 只吃 heal——身体里其他部件不进账)。
  * 键序固定(UH 先),供 chooseRecipeWithDemand 确定性消费。
  */
-export function combatBoostDemand(plan: { attackers: number; healers: number; dismantlers?: number }): Record<string, number> {
+export function combatBoostDemand(plan: { attackers: number; healers: number; dismantlers?: number; rangers?: number }): Record<string, number> {
   const demand: Record<string, number> = {};
   const add = (compound: string | undefined, body: readonly string[], count: number): void => {
     if (!compound || count <= 0) return;
@@ -70,6 +70,7 @@ export function combatBoostDemand(plan: { attackers: number; healers: number; di
   add(ROLE_COMPOUNDS.assaulter, ASSAULTER_BODY_PARTS, plan.attackers);
   add(ROLE_COMPOUNDS.medic, SUPPORT_BODY_PARTS, plan.healers);
   add(ROLE_COMPOUNDS.dismantler, DISMANTLER_BODY_PARTS, plan.dismantlers ?? 0);
+  add(ROLE_COMPOUNDS.ranger, RANGER_BODY_PARTS, plan.rangers ?? 0);
   return demand;
 }
 

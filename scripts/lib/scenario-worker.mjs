@@ -44,6 +44,7 @@ const squadProbe = args.includes('--squad-probe');
 const raidProbe = args.includes('--raid-probe');
 const assaultProbe = args.includes('--assault-probe');
 const siegeProbe = args.includes('--siege-probe');
+const kiteProbe = args.includes('--kite-probe');
 const mineralProbe = args.includes('--mineral-probe');
 const linkplaceProbe = args.includes('--linkplace-probe');
 assert(!linkplaceProbe || lifecycle && logistics && !construction && !fairnessProbe, '--linkplace-probe requires --lifecycle --logistics');
@@ -55,6 +56,7 @@ assert(!squadProbe || combatProbe, '--squad-probe requires --combat-probe (squad
 assert(!raidProbe || marketProbe, '--raid-probe requires --market-probe (raid rides the market fixture with its W0N2 + npc user)');
 assert(!assaultProbe || lifecycle && logistics, '--assault-probe requires --lifecycle --logistics');
 assert(!siegeProbe || assaultProbe, '--siege-probe requires --assault-probe (siege rides the assault fixture)');
+assert(!kiteProbe || assaultProbe, '--kite-probe requires --assault-probe (kite rides the assault fixture)');
 assert(!persistentFailure || lifecycle && logistics && logisticsRecovery, '--persistent-failure requires --lifecycle --logistics --logistics-recovery');
 assert(!economyProbe || lifecycle && logistics, '--economy-probe requires --lifecycle --logistics');
 assert(!cpuStress || fairnessProbe, '--cpu-stress requires --fairness-probe');
@@ -77,9 +79,9 @@ mkdirSync(output, { recursive: true });
 const bundle = readFileSync('dist/main.js', 'utf8');
 const report = {
   variant, fixture, bundleHash: createHash('sha256').update(bundle).digest('hex'),
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, siegeProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, siegeProbe, kiteProbe, tickCount,
   node: process.version,
-    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, siegeProbe, tickCount,
+    logistics, construction, logisticsRecovery, persistentFailure, trafficProbe, trafficRecovery, fairnessProbe, economyProbe, populationPressure, cpuStress, multiRoom, maintenanceProbe, defenseProbe, progressionProbe, intelProbe, combatProbe, storageProbe, linksProbe, linkplaceProbe, mineralProbe, labsProbe, marketProbe, factoryProbe, squadProbe, raidProbe, assaultProbe, siegeProbe, kiteProbe, tickCount,
   checks: [], ticks: [], logs: [], status: 'running',
 };
 const save = () => writeFileSync(resolve(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
@@ -508,6 +510,7 @@ try {
       report.siege = { spawnGoneAt: null, rampartGoneAt: null, extGoneAt: null };
     }
     report.assault = { target: 'W0N2', squatters: ['Squatter-1', 'Squatter-2'], minHits: 2000, clearedAt: null, phases: {}, uhPeak: 0, uhBoosted: 0, inputLabEnergyPeak: 0, inputLabIds: assaultInputLabIds };
+    if (kiteProbe) report.kite = { rangerSpawned: false, rangerMinHits: null, engagedAt: null };
   }
   if (progressionProbe) {
     // RCL2 stage seeds three built extensions so spawn capacity reaches 450 and
@@ -767,8 +770,10 @@ try {
       try {
         const env = server.common.storage.env;
         const raw = await env.get(env.keys.MEMORY + bot.id);
-        const ph = (JSON.parse(raw || '{}').intel ?? {}).assault?.phase;
-        if (ph) report.assault.phases[ph] = i;
+        const aa = (JSON.parse(raw || '{}').intel ?? {}).assault;
+        if (aa?.phase) report.assault.phases[aa.phase] = i;
+        if (aa?.withdrawReason) report.assault.withdrawReason = aa.withdrawReason;
+        if (aa?.lastLoss) report.assault.lastLoss = aa.lastLoss;
       } catch { /* 采样失败不影响世界 */ }
       // 强化链证据(M7-7):产物峰值(反应链通)+ 曾见 UH 强化部件(boostCreep 通),
       // 成员收档即解散,终帧扫不到——按 ever-seen 记账。
@@ -787,6 +792,32 @@ try {
         }
       }
       report.assault.uhBoosted = Math.max(report.assault.uhBoosted, boosted);
+      if (assaultProbe) {
+        // 小队行踪跟踪:两房合扫,名字首失时记最后位置(折损归因)。
+        const all = [...home, ...(await server.world.roomObjects('W0N2'))];
+        report.assault.lastSeen ??= {};
+        const present = new Set();
+        for (const o of all) {
+          if (o.type !== 'creep') continue;
+          const nm = String(o.name);
+          if (!/^(assaulter|medic|ranger|dismantler)-/.test(nm)) continue;
+          present.add(nm);
+          report.assault.lastSeen[nm] = { tick: i, room: o.room ?? '?', x: o.x, y: o.y, hits: o.hits };
+        }
+        for (const [nm, seen] of Object.entries(report.assault.lastSeen)) {
+          if (!present.has(nm) && !('goneAt' in seen)) seen.goneAt = i;
+        }
+      }
+      if (kiteProbe) {
+        const inField = await server.world.roomObjects('W0N2');
+        for (const o of [...home, ...inField]) {
+          if (o.type !== 'creep' || !String(o.name).startsWith('ranger-')) continue;
+          report.kite.rangerSpawned = true;
+          report.kite.rangerMinHits = Math.min(report.kite.rangerMinHits ?? Infinity, o.hits ?? 0);
+          if (o.room === 'W0N2' && inField.some(h => h.type === 'creep' && report.assault.squatters.includes(h.name)
+            && Math.max(Math.abs(h.x - o.x), Math.abs(h.y - o.y)) <= 3)) report.kite.engagedAt ??= i;
+        }
+      }
       if (siegeProbe) {
         const hostileStructs = (await server.world.roomObjects('W0N2')).filter(o => o.user === '2' && o.type !== 'creep');
         const left = new Set(hostileStructs.map(o => o.type));
@@ -1354,6 +1385,13 @@ try {
       check('UH produced by the reaction line', report.assault.uhPeak >= 90);
       check('assaulters boosted with UH before departing', report.assault.uhBoosted >= 1);
       check('input labs never fed energy (sink scoped to demanded compound)', report.assault.inputLabEnergyPeak === 0);
+      if (kiteProbe) {
+        // 远程拉扯(M7-9):armed=2 编成带游骑;蹲守者纯近战——风筝成立则
+        // 游骑全程 400 血无划伤,且确曾压进 3 环输出(不是远程围观)。
+        check('kite ranger fielded in the squad', report.kite.rangerSpawned);
+        check('kite ranger engaged inside range 3', report.kite.engagedAt !== null);
+        check('kite ranger never scratched by melee squatters', report.kite.rangerMinHits === 400);
+      }
       if (siegeProbe) {
         // 围攻(M7-8):任务完成判据含"敌建筑拆完"——spawn/rampart/ext 全灭才收档。
         check('siege dismantled the hostile spawn', report.siege.spawnGoneAt !== null);

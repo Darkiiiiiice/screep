@@ -5,7 +5,7 @@ import { guardSpawnNeed } from '../domain/combat';
 import { STORAGE_RESERVE_FLOOR } from '../domain/logistics';
 import { claimerSpawnNeed, colonizerSpawnNeed, pioneerSpawnNeed, remoteHaulerSpawnNeed, remoteMinerSpawnNeed } from '../domain/intel';
 import { attackerSpawnNeed, evaluateRaidTargets } from '../domain/expedition';
-import { ASSAULTER_BODY_PARTS, ASSAULT_MISSION_TIMEOUT, DISMANTLER_BODY_PARTS, SUPPORT_BODY_PARTS, assaultSpawnNeed, planAssaultSquad } from '../domain/raid';
+import { ASSAULTER_BODY_PARTS, ASSAULT_MISSION_TIMEOUT, DISMANTLER_BODY_PARTS, RANGER_BODY_PARTS, SUPPORT_BODY_PARTS, assaultSpawnNeed, planAssaultSquad } from '../domain/raid';
 import { driveAssault } from './raid';
 import { runLogistics, runMinerals, runMiners } from './logistics';
 import { driveLabs } from './labs';
@@ -319,25 +319,28 @@ export function runBootstrap(): void {
                               aliveAttackers: Object.values(Game.creeps).filter(c => c.memory.role === 'assaulter').length,
                               aliveHealers: Object.values(Game.creeps).filter(c => c.memory.role === 'medic').length,
                               aliveDismantlers: Object.values(Game.creeps).filter(c => c.memory.role === 'dismantler').length,
+                              aliveRangers: Object.values(Game.creeps).filter(c => c.memory.role === 'ranger').length,
                               workers: creeps.length, capacity: room.energyCapacityAvailable, energyAvailable: room.energyAvailable, now: Game.time,
                             });
                             if (need) {
                               const name = `${need.role}-${room.name}-${Game.time}`;
                               const rc = idle.spawnCreep(
                                 need.role === 'assaulter' ? [...ASSAULTER_BODY_PARTS]
-                                  : need.role === 'medic' ? [...SUPPORT_BODY_PARTS] : [...DISMANTLER_BODY_PARTS],
+                                  : need.role === 'medic' ? [...SUPPORT_BODY_PARTS]
+                                    : need.role === 'ranger' ? [...RANGER_BODY_PARTS] : [...DISMANTLER_BODY_PARTS],
                                 name, { memory: { role: need.role, assaultTarget: need.target, home: room.name } });
                               // 只在入列成功时登记(spawn 忙时 ERR_BUSY 会造幽灵名册);
                               // 每次成功入列重置集结时限(超时锚=最近增长,非立队时刻)。
                               if (rc === OK) {
                                 if (assIntel.assault) {
                                   (need.role === 'assaulter' ? assIntel.assault.attackers
-                                    : need.role === 'medic' ? assIntel.assault.healers : assIntel.assault.dismantlers).push(name);
+                                    : need.role === 'medic' ? assIntel.assault.healers
+                                      : need.role === 'ranger' ? assIntel.assault.rangers : assIntel.assault.dismantlers).push(name);
                                   assIntel.assault.startedAt = Game.time;
                                 } else {
                                   const armed = assIntel.rooms[need.target]?.threat.armed ?? 0;
                                   assIntel.assault = { target: need.target, phase: 'muster', plan: need.plan ?? planAssaultSquad(armed),
-                                    attackers: need.role === 'assaulter' ? [name] : [], healers: need.role === 'medic' ? [name] : [], dismantlers: [], losses: 0, startedAt: Game.time,
+                                    attackers: need.role === 'assaulter' ? [name] : [], healers: need.role === 'medic' ? [name] : [], dismantlers: need.role === 'dismantler' ? [name] : [], rangers: need.role === 'ranger' ? [name] : [], losses: 0, startedAt: Game.time,
                                     // 总时长预算立队定死:补员重置 startedAt 不重置它(§3.8)。
                                     deadline: Game.time + ASSAULT_MISSION_TIMEOUT };
                                 }

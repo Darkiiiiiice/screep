@@ -23,6 +23,10 @@ export const SUPPORT_BODY_PARTS = ['heal', 'heal', 'move', 'move'] as const;
 /** 拆墙手身体(M7-8):[WORK×4, MOVE×4] = 600——dismantle 50/件/tick(引擎
  * DISMANTLE_POWER 实证),200/tick 裸拆、ZH 强化后 400/tick;4 MOVE 平原全速。 */
 export const DISMANTLER_BODY_COST = 600;
+/** 游骑身体(M7-9 远程拉扯):[RANGED_ATTACK×2,MOVE×2]=400——3 环内全额
+ * 20/tick(引擎 rangedAttack 无距离衰减),KO 强化后 40;无近战件,风筝为生。 */
+export const RANGER_BODY_COST = 400;
+export const RANGER_BODY_PARTS = ['ranged_attack', 'ranged_attack', 'move', 'move'] as const;
 export const DISMANTLER_BODY_PARTS = ['work', 'work', 'work', 'work', 'move', 'move', 'move', 'move'] as const;
 /** 突袭是满员工人口粮之上的盈余支出:地板同其他盈余岗。 */
 export const ASSAULT_WORKER_FLOOR = 4;
@@ -87,6 +91,8 @@ export interface AssaultSquadPlan {
   /** 拆墙手(M7-8):目标房有敌建筑时带 1 具——无战力,清场后开工拆建筑,
    * 拆完才算任务完成(围攻语义);v1 单兵,多墙房留待围攻刀扩编。 */
   dismantlers: number;
+  /** 游骑(M7-9):敌武装 ≥2 时带 1 具——3 环风筝输出,无近战件不贴身。 */
+  rangers: number;
 }
 
 /**
@@ -95,7 +101,9 @@ export interface AssaultSquadPlan {
  */
 export function planAssaultSquad(armed: number, structures = 0): AssaultSquadPlan {
   const attackers = Math.min(Math.max(1, armed) + 1, ASSAULT_MAX_ATTACKERS);
-  return { attackers, healers: Math.ceil(attackers / 2), dismantlers: structures > 0 ? 1 : 0 };
+  // 游骑只在敌人有真实反击规模时上:对 1 具散兵近战群殴足够,风筝位是
+  // 纯增量输出(等速近战追不上直线后撤,3 环内白打);v1 单兵。
+  return { attackers, healers: Math.ceil(attackers / 2), dismantlers: structures > 0 ? 1 : 0, rangers: armed >= 2 ? 1 : 0 };
 }
 
 /** 突袭阶段:集结(母房出口)→ 行军(跨房)→ 交战 → 撤退/完成。 */
@@ -109,6 +117,7 @@ export interface AssaultState {
   attackers: readonly string[];
   healers: readonly string[];
   dismantlers: readonly string[];
+  rangers: readonly string[];
   /** 本次出击累计折损(含撤退路上阵亡)。 */
   losses: number;
   /** 任务总时长截止 tick(立队时定死,不随补员重置;§3.8 时长预算)。 */
@@ -118,6 +127,9 @@ export interface AssaultState {
 export interface AssaultObservation {
   /** 当前 tick(时长预算判据)。 */
   now: number;
+  /** 全员已就位集结格(M7-9,§3.8 集结字面义:人到齐——名册齐只是数字,
+   * 位置齐才开拔;否则整队在敌门格站桩等迟到的,白吃火力)。 */
+  squadAssembled: boolean;
   /** 新鲜情报显示目标房武装已清零(完成判据)。 */
   threatCleared: boolean;
   /** 全员已进目标房(行军完成判据,.game 层按 room.name 计数)。 */
@@ -167,8 +179,8 @@ export function advanceAssault(state: AssaultState, obs: AssaultObservation): As
     }
   }
   if (state.phase === 'muster' && attackersAlive >= state.plan.attackers && state.healers.length >= state.plan.healers
-    && state.dismantlers.length >= state.plan.dismantlers
-    && obs.squadBoostResolved) {
+    && state.dismantlers.length >= state.plan.dismantlers && state.rangers.length >= state.plan.rangers
+    && obs.squadAssembled && obs.squadBoostResolved) {
     return { phase: 'travel', complete: false };
   }
   if (state.phase === 'travel' && obs.squadInRoom) {
@@ -183,6 +195,7 @@ export interface AssaultSpawnNeedArgs {
   aliveAttackers: number;
   aliveHealers: number;
   aliveDismantlers: number;
+  aliveRangers: number;
   workers: number;
   capacity: number;
   energyAvailable: number;
@@ -190,7 +203,7 @@ export interface AssaultSpawnNeedArgs {
 }
 
 export interface AssaultSpawnNeed {
-  role: 'assaulter' | 'medic' | 'dismantler';
+  role: 'assaulter' | 'medic' | 'dismantler' | 'ranger';
   target: string;
   bodyCost: number;
   /** 立队时的编成(仅首具返回;补员时在飞小队已有编成)。 */
@@ -229,6 +242,11 @@ export function assaultSpawnNeed(args: AssaultSpawnNeedArgs): AssaultSpawnNeed |
   if (args.aliveDismantlers < state.plan.dismantlers) {
     if (args.capacity < DISMANTLER_BODY_COST || args.energyAvailable < DISMANTLER_BODY_COST) return null;
     return { role: 'dismantler', target, bodyCost: DISMANTLER_BODY_COST };
+  }
+  // 游骑殿底(M7-9):纯增量输出位,战力链齐了才补。
+  if (args.aliveRangers < state.plan.rangers) {
+    if (args.capacity < RANGER_BODY_COST || args.energyAvailable < RANGER_BODY_COST) return null;
+    return { role: 'ranger', target, bodyCost: RANGER_BODY_COST };
   }
   return null;
 }
